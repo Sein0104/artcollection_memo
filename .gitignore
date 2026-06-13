@@ -1,0 +1,36 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# dependencies
+node_modules/
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# build/cache
+dist/
+build/
+.cache/
+.pytest_cache/
+.mypy_cache/
+
+# logs
+*.log
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# local databases
+*.sqlite
+*.sqlite3
+*.db
+
+*.tsbuildinfo

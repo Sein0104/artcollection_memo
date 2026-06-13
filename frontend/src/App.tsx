@@ -1,0 +1,1667 @@
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { api } from "./api";
+import type { CSSProperties, ChangeEvent, ReactNode } from "react";
+import type { Artwork, DailyMissions, MissionAnalysis, Museum, Post, PostComment, PostDetail, Session, UserState } from "./types";
+
+const emptyState: UserState = {
+  points: 0,
+  totalEarnedPoints: 0,
+  installedRewardId: null,
+  collection: [],
+  missionCollection: [],
+  purchases: [],
+};
+
+const tabs = [
+  { id: "scan", label: "홈" },
+  { id: "artworks", label: "작품 소개" },
+  { id: "collection", label: "내 컬렉션" },
+  { id: "community", label: "게시판" },
+];
+
+const titleSteps = [
+  [4000, "마스터 큐레이터"],
+  [3000, "컬렉션 디렉터"],
+  [2400, "명예 수집가"],
+  [1800, "전시 기획자"],
+  [1200, "큐레이터 후보"],
+  [800, "작품 탐험가"],
+  [500, "갤러리 산책자"],
+  [200, "신진 감상가"],
+  [0, "새내기 감상가"],
+] as const;
+
+const artworkFilters = ["전체", "서양", "동양", "한국화", "조각", "설치예술", "공예", "미디어아트", "현대", "인상주의", "추상", "초상", "풍경", "수묵"];
+const collectionProgressFilters = artworkFilters.filter((filter) => filter !== "전체");
+
+type SortMode = "name" | "year";
+type BoardType = "free" | "review";
+type BoardFilter = "all" | BoardType | "popular";
+type MissionMode = "capture" | "pose";
+
+const artworkTextTranslations: Record<string, string> = {
+  "american painting and sculpture": "미국 회화·조각",
+  "modern european painting and sculpture": "근현대 유럽 회화·조각",
+  "european painting and sculpture": "유럽 회화·조각",
+  "painting and sculpture of europe": "유럽 회화·조각",
+  "arts of the americas": "아메리카 미술",
+  "art of the americas": "아메리카 미술",
+  "arts of asia": "아시아 미술",
+  "arts of africa": "아프리카 미술",
+  "japanese art": "일본 미술",
+  "greek and roman art": "그리스·로마 미술",
+  "prints and drawings": "판화와 드로잉",
+  prints: "판화",
+  "modern art": "현대미술",
+  "architecture and design": "건축과 디자인",
+  "applied arts of europe": "유럽 응용미술",
+  "south asian": "남아시아 미술",
+  pointillism: "점묘주의",
+  impressionism: "인상주의",
+  "post-impressionism": "후기인상주의",
+  modernism: "모더니즘",
+  "modern european": "근현대 유럽",
+  renaissance: "르네상스",
+  realism: "사실주의",
+  rococo: "로코코",
+  baroque: "바로크",
+  "19th century": "19세기",
+  "nineteenth century": "19세기",
+  georgian: "조지아 시대",
+  painting: "회화",
+  sculpture: "조각",
+  ceramic: "도자",
+  print: "판화",
+  photograph: "사진",
+  textile: "섬유",
+  vessel: "기물",
+  miniature: "미니어처",
+  "architectural fragment": "건축 부재",
+  "oil on canvas": "캔버스에 유채",
+  "oil on fabric": "천에 유채",
+  "oil on panel": "패널에 유채",
+  "oil on wood panel": "목판에 유채",
+  marble: "대리석",
+  bronze: "청동",
+  terracotta: "테라코타",
+  "glazed terracotta": "유약을 바른 테라코타",
+  "polychromed terracotta": "채색 테라코타",
+  "color woodblock print": "채색 목판화",
+  "woodblock print": "목판화",
+  "ink and color on paper": "종이에 먹과 채색",
+  pastel: "파스텔",
+  "mixed media": "혼합 매체",
+  america: "미국",
+  france: "프랑스",
+  italy: "이탈리아",
+  england: "영국",
+  netherlands: "네덜란드",
+  germany: "독일",
+  japan: "일본",
+  greece: "그리스",
+  venice: "베네치아",
+  florence: "피렌체",
+  holland: "네덜란드",
+};
+
+const artworkTextReplacements: Array<[RegExp, string]> = [
+  [/(\d+)(st|nd|rd|th)\s+century/gi, "$1세기"],
+  [/\bEdo period\b/gi, "에도 시대"],
+  [/\bculture or style\b/gi, "문화권"],
+  [/\bProbably\b/gi, "추정"],
+  [/\bearly\b/gi, "초"],
+  [/\bmid\b/gi, "중반"],
+  [/\bSouth\b/g, "남부"],
+  [/\bNew York\b/g, "뉴욕"],
+  [/\bTuscany\b/g, "토스카나"],
+  [/\bAttic\b/g, "아티카"],
+  [/\bCampanian\b/g, "캄파니아"],
+  [/\bAmerica\b/g, "미국"],
+  [/\bAmerican\b/g, "미국"],
+  [/\bFrance\b/g, "프랑스"],
+  [/\bFrench\b/g, "프랑스"],
+  [/\bItaly\b/g, "이탈리아"],
+  [/\bItalian\b/g, "이탈리아"],
+  [/\bEngland\b/g, "영국"],
+  [/\bBritish\b/g, "영국"],
+  [/\bNetherlands\b/g, "네덜란드"],
+  [/\bDutch\b/g, "네덜란드"],
+  [/\bGermany\b/g, "독일"],
+  [/\bJapan\b/g, "일본"],
+  [/\bJapanese\b/g, "일본"],
+  [/\bGreece\b/g, "그리스"],
+  [/\bGreek\b/g, "그리스"],
+  [/\bRome\b/g, "로마"],
+  [/\bRoman\b/g, "로마"],
+  [/\bFlorence\b/g, "피렌체"],
+  [/\bVenice\b/g, "베네치아"],
+  [/\bcentury\b/gi, "세기"],
+  [/border added/gi, "테두리 추가"],
+  [/original built/gi, "원 건축"],
+  [/original demolished/gi, "원형 철거"],
+  [/reconstructed/gi, "재구성"],
+  [/\bc\.\s*/gi, "약 "],
+];
+
+const boardTabs: Array<{ id: BoardFilter; label: string }> = [
+  { id: "all", label: "전체 글" },
+  { id: "free", label: "자유게시판" },
+  { id: "review", label: "후기게시판" },
+  { id: "popular", label: "추천글" },
+];
+
+const boardTypeLabels: Record<BoardType, string> = {
+  free: "자유",
+  review: "후기",
+};
+
+function routeFromHash() {
+  const value = window.location.hash.replace("#", "");
+  if (value.startsWith("post/")) return value;
+  return ["scan", "artworks", "collection", "community", "write", "login", "signup"].includes(value) ? value : "scan";
+}
+
+export function App() {
+  const [route, setRoute] = useState(routeFromHash);
+  const [artworks, setArtworks] = useState<Artwork[]>([]);
+  const [museums, setMuseums] = useState<Museum[]>([]);
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [daily, setDaily] = useState<DailyMissions | null>(null);
+  const [session, setSession] = useState<Session>({ user: null, state: emptyState });
+  const [toast, setToast] = useState("");
+  const [selectedImage, setSelectedImage] = useState<Artwork | null>(null);
+  const [isTitleGuideOpen, setIsTitleGuideOpen] = useState(false);
+  const [isBootstrapping, setIsBootstrapping] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState("");
+
+  useEffect(() => {
+    const onHashChange = () => setRoute(routeFromHash());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  useEffect(() => {
+    void bootstrap();
+  }, []);
+
+  async function bootstrap() {
+    setIsBootstrapping(true);
+    setBootstrapError("");
+    try {
+      const [artworkResult, museumResult, postResult, missionResult] = await Promise.all([
+        api.artworks(),
+        api.museums(),
+        api.posts(),
+        api.dailyMissions(),
+      ]);
+      setArtworks(artworkResult.artworks);
+      setMuseums(museumResult.museums);
+      setPosts(postResult.posts);
+      setDaily(missionResult);
+
+      const nickname = localStorage.getItem("artcatch-react-session");
+      if (nickname) {
+        try {
+          const restored = await api.state(nickname);
+          setSession(restored);
+        } catch {
+          localStorage.removeItem("artcatch-react-session");
+        }
+      }
+    } catch (error) {
+      setBootstrapError(error instanceof Error ? error.message : "api_error");
+    } finally {
+      setIsBootstrapping(false);
+    }
+  }
+
+  function showToast(message: string) {
+    setToast(message);
+    window.setTimeout(() => setToast(""), 2200);
+  }
+
+  function updateSession(next: Session) {
+    setSession(next);
+    if (next.user) localStorage.setItem("artcatch-react-session", next.user.nickname);
+  }
+
+  function updateState(state: UserState) {
+    setSession((current) => ({ ...current, state }));
+  }
+
+  async function completeMission(artworkId: string) {
+    if (!session.user) {
+      window.location.hash = "#login";
+      showToast("로그인 후 미션을 완료할 수 있어요.");
+      return;
+    }
+    try {
+      const result = await api.completeMission(session.user.nickname, artworkId);
+      updateState(result.state);
+      showToast("미션을 완료하고 80P를 받았습니다.");
+    } catch (error) {
+      showToast(error instanceof Error && error.message === "daily_mission_limit" ? "오늘 미션은 3개까지 가능합니다." : "미션을 완료하지 못했습니다.");
+    }
+  }
+
+  async function buyReward(artworkId: string) {
+    if (!session.user) {
+      window.location.hash = "#login";
+      showToast("로그인 후 교환할 수 있어요.");
+      return;
+    }
+    const result = await api.buyReward(session.user.nickname, artworkId);
+    updateState(result.state);
+    showToast("보상 작품을 설치했습니다.");
+  }
+
+  const earnedPoints = session.state.totalEarnedPoints ?? session.state.points;
+  const title = titleSteps.find(([min]) => earnedPoints >= min)?.[1] ?? "새내기 감상가";
+  const postId = route.startsWith("post/") ? route.slice("post/".length) : null;
+  const activeNav = postId || route === "write" ? "community" : route;
+  const collectionCount = session.state.collection.length + session.state.missionCollection.length + session.state.purchases.length;
+
+  return (
+    <>
+      <header className="topbar">
+        <a className="brand" href="#scan">
+          <span className="brand-mark">A</span>
+          <span>
+            <strong>ArtCatch</strong>
+          </span>
+        </a>
+        <nav className="nav-links">
+          {tabs.map((tab) => (
+            <a key={tab.id} className={activeNav === tab.id ? "is-active" : ""} href={`#${tab.id}`}>
+              {tab.label}
+            </a>
+          ))}
+        </nav>
+        <div className="auth-area">
+          {session.user ? (
+            <div className="user-pill">
+              <span>{session.user.nickname}</span>
+              <button
+                className="ghost-button"
+                onClick={() => {
+                  localStorage.removeItem("artcatch-react-session");
+                  setSession({ user: null, state: emptyState });
+                  showToast("로그아웃했습니다.");
+                }}
+              >
+                로그아웃
+              </button>
+            </div>
+          ) : (
+            <div className="auth-buttons">
+              <a className="ghost-button" href="#login">
+                로그인
+              </a>
+              <a className="primary-link" href="#signup">
+                회원가입
+              </a>
+            </div>
+          )}
+        </div>
+      </header>
+
+      <main>
+        <section className="status-strip">
+          <button className="status-tile title-tile" type="button" onClick={() => setIsTitleGuideOpen(true)}>
+            <span className="label">칭호</span>
+            <strong>{title}</strong>
+          </button>
+          <div className="status-tile">
+            <span className="label">포인트</span>
+            <strong>{session.state.points}P</strong>
+          </div>
+          <div className="status-tile">
+            <span className="label">수집</span>
+            <strong>{collectionCount}점</strong>
+          </div>
+        </section>
+
+        {(isBootstrapping || bootstrapError) && (
+          <ApiNotice
+            error={bootstrapError}
+            isLoading={isBootstrapping}
+            onRetry={() => {
+              void bootstrap();
+            }}
+          />
+        )}
+
+        {route === "scan" && (
+          <ScanPage
+            artworks={artworks}
+            daily={daily}
+            session={session}
+            onCompleteMission={completeMission}
+            onBuyReward={buyReward}
+            showToast={showToast}
+            openImage={setSelectedImage}
+          />
+        )}
+        {route === "artworks" && <ArtworksPage artworks={artworks} openImage={setSelectedImage} />}
+        {route === "collection" && <CollectionPage artworks={artworks} session={session} openImage={setSelectedImage} />}
+        {route === "community" && <CommunityPage museums={museums} posts={posts} />}
+        {route === "write" && <PostWritePage museums={museums} session={session} setPosts={setPosts} showToast={showToast} />}
+        {postId && <PostDetailPage postId={postId} session={session} setPosts={setPosts} showToast={showToast} />}
+        {route === "login" && <AuthPage mode="login" updateSession={updateSession} showToast={showToast} />}
+        {route === "signup" && <AuthPage mode="signup" updateSession={updateSession} showToast={showToast} />}
+      </main>
+
+      {selectedImage && <ImageModal art={selectedImage} onClose={() => setSelectedImage(null)} />}
+      {isTitleGuideOpen && <TitleGuideModal points={earnedPoints} currentTitle={title} onClose={() => setIsTitleGuideOpen(false)} />}
+      {toast && <div className="toast is-visible">{toast}</div>}
+    </>
+  );
+}
+
+function ApiNotice({ error, isLoading, onRetry }: { error: string; isLoading: boolean; onRetry: () => void }) {
+  if (isLoading) {
+    return (
+      <section className="api-notice">
+        <strong>데이터를 불러오는 중입니다.</strong>
+        <span>작품, 미션, 게시판 정보를 백엔드에서 가져오고 있어요.</span>
+      </section>
+    );
+  }
+
+  return (
+    <section className="api-notice is-error">
+      <div>
+        <strong>백엔드 API 연결에 실패했습니다.</strong>
+        <span>서버가 응답하지 않습니다. 백엔드를 켠 뒤 다시 불러와주세요. 오류 코드: {error}</span>
+      </div>
+      <button onClick={onRetry}>다시 불러오기</button>
+    </section>
+  );
+}
+
+function ScanPage({
+  artworks,
+  daily,
+  session,
+  onCompleteMission,
+  onBuyReward,
+  showToast,
+  openImage,
+}: {
+  artworks: Artwork[];
+  daily: DailyMissions | null;
+  session: Session;
+  onCompleteMission: (artworkId: string) => Promise<void>;
+  onBuyReward: (artworkId: string) => void;
+  showToast: (message: string) => void;
+  openImage: (art: Artwork) => void;
+}) {
+  const [challengeArt, setChallengeArt] = useState<Artwork | null>(null);
+  const featured = artworks.filter((art) => !art.premium).slice(0, 6);
+  const weeklyRewards = weeklySelection(
+    artworks.filter((art) => art.premium),
+    4,
+  );
+  const completedMissionIds = new Set(
+    session.state.missionCollection
+      .filter((entry) => entry.dateKey === daily?.dateKey)
+      .map((entry) => entry.artworkId),
+  );
+  const completedMissionCount = completedMissionIds.size;
+
+  function openMission(art: Artwork) {
+    if (!session.user) {
+      window.location.hash = "#login";
+      showToast("로그인 후 미션에 도전할 수 있어요.");
+      return;
+    }
+    setChallengeArt(art);
+  }
+
+  return (
+    <section className="app-page is-active">
+      <div className="page-title">
+        <span className="eyebrow">HOME</span>
+        <h1>사진과 닮은 작품 찾기</h1>
+      </div>
+
+      <section className="mission-panel wide">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">DAILY</span>
+            <h2>오늘의 미션 3개</h2>
+            <p className="section-note">통과한 미션 1개마다 80P를 받을 수 있어요.</p>
+          </div>
+          <span className="count-pill">완료 {completedMissionCount}/3</span>
+        </div>
+        <div className="results-grid">
+          {daily?.missions.map((art) => {
+            const isCompleted = completedMissionIds.has(art.id);
+            const isLimitReached = completedMissionCount >= 3;
+            return (
+              <ArtCard
+                key={art.id}
+                art={art}
+                openImage={openImage}
+                action={
+                  <button disabled={isCompleted || isLimitReached} onClick={() => openMission(art)}>
+                    {isCompleted ? "완료" : isLimitReached ? "오늘 완료" : "미션 도전"}
+                  </button>
+                }
+              />
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="catalog-section">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">FEATURED</span>
+            <h2>추천 작품</h2>
+          </div>
+          <a className="section-link" href="#artworks">
+            더보기
+          </a>
+        </div>
+        <div className="catalog-grid compact">
+          {featured.map((art) => (
+            <ArtCard key={art.id} art={art} openImage={openImage} />
+          ))}
+        </div>
+      </section>
+
+      <section className="reward-section">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">POINT SHOP</span>
+            <h2>이번 주 포인트 상점</h2>
+            <p className="section-note">매주 월요일에 4개 작품이 새로 바뀌어요.</p>
+          </div>
+        </div>
+        <div className="reward-grid">
+          {weeklyRewards.map((art) => (
+            <ArtCard
+              key={art.id}
+              art={art}
+              openImage={openImage}
+              action={
+                <button disabled={session.state.purchases.includes(art.id) || session.state.points < art.cost} onClick={() => onBuyReward(art.id)}>
+                  {session.state.purchases.includes(art.id) ? "설치완료" : `${art.cost}P 교환`}
+                </button>
+              }
+            />
+          ))}
+        </div>
+      </section>
+
+      {challengeArt && (
+        <MissionChallengeModal
+          art={challengeArt}
+          userNickname={session.user?.nickname}
+          onClose={() => setChallengeArt(null)}
+          onComplete={async () => {
+            await onCompleteMission(challengeArt.id);
+            setChallengeArt(null);
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+function ArtworksPage({
+  artworks,
+  openImage,
+}: {
+  artworks: Artwork[];
+  openImage: (art: Artwork) => void;
+}) {
+  const [filter, setFilter] = useState("전체");
+  const [sortMode, setSortMode] = useState<SortMode>("name");
+  const visible = artworks.filter((art) => isArtworkMatch(art, filter)).sort((left, right) => sortArtworks(left, right, sortMode));
+
+  return (
+    <section className="app-page is-active">
+      <div className="page-title board-title">
+        <div>
+          <span className="eyebrow">ARTWORKS</span>
+          <h1>미술작품 소개</h1>
+        </div>
+        <span className="count-pill">{visible.length}점</span>
+      </div>
+
+      <section className="catalog-section is-first">
+        <div className="catalog-controls">
+          <div className="filter-bar">
+            {artworkFilters.map((item) => (
+              <button key={item} className={`chip ${filter === item ? "is-active" : ""}`} onClick={() => setFilter(item)}>
+                {item}
+              </button>
+            ))}
+          </div>
+          <div className="sort-control" aria-label="작품 정렬">
+            <button className={sortMode === "name" ? "is-active" : ""} onClick={() => setSortMode("name")}>
+              이름순
+            </button>
+            <button className={sortMode === "year" ? "is-active" : ""} onClick={() => setSortMode("year")}>
+              연도순
+            </button>
+          </div>
+        </div>
+        <div className="catalog-grid">
+          {visible.map((art) => (
+            <ArtCard key={art.id} art={art} openImage={openImage} />
+          ))}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function MissionChallengeModal({
+  art,
+  userNickname,
+  onClose,
+  onComplete,
+}: {
+  art: Artwork;
+  userNickname?: string;
+  onClose: () => void;
+  onComplete: () => Promise<void>;
+}) {
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [analysis, setAnalysis] = useState<MissionAnalysis | null>(null);
+  const [missionMode, setMissionMode] = useState<MissionMode>("capture");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const title = displayArtworkTitle(art);
+
+  useEffect(() => {
+    if (isCameraOpen && videoRef.current && cameraStreamRef.current) {
+      videoRef.current.srcObject = cameraStreamRef.current;
+      void videoRef.current.play().catch(() => setCameraError("카메라 영상을 시작하지 못했습니다. 브라우저 권한을 확인해주세요."));
+    }
+  }, [isCameraOpen]);
+
+  useEffect(() => {
+    return () => {
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+    };
+  }, []);
+
+  async function analyzeImage(imageDataUrl: string) {
+    setPreviewUrl(imageDataUrl);
+    setAnalysis(null);
+    setIsAnalyzing(true);
+    try {
+      setAnalysis(await api.analyzeMission(art.id, imageDataUrl, missionMode, userNickname));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "ai_failed";
+      setAnalysis({
+        score: 0,
+        passed: false,
+        feedback:
+          message === "openai_api_key_required"
+            ? "AI 판정을 쓰려면 백엔드 .env에 OPENAI_API_KEY를 먼저 설정해주세요."
+            : message.includes("valid image")
+              ? "이미지 파일을 읽지 못했습니다. JPG나 PNG 사진으로 다시 시도해주세요."
+              : `AI 유사도 판정에 실패했습니다. ${message}`,
+      });
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }
+
+  async function handleFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      await analyzeImage(await imageFileToMissionDataUrl(file));
+    } catch {
+      setAnalysis({
+        score: 0,
+        passed: false,
+        feedback: "이미지를 불러오지 못했습니다. 다른 JPG나 PNG 사진으로 다시 시도해주세요.",
+      });
+    } finally {
+      event.target.value = "";
+    }
+  }
+
+  function openFilePicker() {
+    if (isAnalyzing) return;
+    setCameraError("");
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+      fileInputRef.current.click();
+    }
+  }
+
+  async function openCamera() {
+    if (isAnalyzing) return;
+    setCameraError("");
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError("이 브라우저에서는 카메라 촬영을 지원하지 않습니다. 이미지 업로드를 사용해주세요.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: "environment" } },
+      });
+      cameraStreamRef.current = stream;
+      setIsCameraOpen(true);
+    } catch {
+      setCameraError("카메라 권한이 거부되었거나 사용할 수 없습니다. 브라우저 권한을 확인해주세요.");
+    }
+  }
+
+  async function captureCameraFrame() {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      setCameraError("카메라 영상이 아직 준비되지 않았습니다. 잠시 뒤 다시 눌러주세요.");
+      return;
+    }
+    const imageDataUrl = videoFrameToDataUrl(video);
+    closeCamera();
+    await analyzeImage(imageDataUrl);
+  }
+
+  function closeCamera() {
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    cameraStreamRef.current = null;
+    setIsCameraOpen(false);
+  }
+
+  async function complete() {
+    if (!analysis?.passed) return;
+    setIsSaving(true);
+    try {
+      await onComplete();
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <div className="mission-modal">
+      <button className="mission-modal-backdrop" onClick={onClose} aria-label="미션 닫기" />
+      <section className="mission-modal-panel">
+        <div className="mission-modal-header">
+          <div>
+            <span className="eyebrow">MISSION</span>
+            <h2>{title}</h2>
+          </div>
+          <button className="ghost-button" onClick={onClose}>
+            닫기
+          </button>
+        </div>
+        <div className="mission-target">
+          <img src={art.image || placeholder(art)} alt={title} />
+          <p>
+            작품의 색감, 구도, 분위기와 닮은 사진을 업로드하거나 카메라로 촬영해보세요.
+          </p>
+        </div>
+        <div className="mission-mode-tabs" aria-label="미션 방식">
+          <button type="button" className={missionMode === "capture" ? "is-active" : ""} onClick={() => setMissionMode("capture")}>
+            작품 촬영
+          </button>
+          <button type="button" className={missionMode === "pose" ? "is-active" : ""} onClick={() => setMissionMode("pose")}>
+            작품 따라하기
+          </button>
+          <p>{missionMode === "pose" ? "사람, 소품, 포즈로 작품의 장면을 재현해도 좋아요." : "실제 장면이나 사물이 작품과 얼마나 닮았는지 봅니다."}</p>
+        </div>
+        <div className="mission-upload-actions">
+          <button type="button" className="upload-action" onClick={openFilePicker} disabled={isAnalyzing}>
+            이미지 업로드
+          </button>
+          <input ref={fileInputRef} className="mission-file-input" type="file" accept="image/*" onChange={handleFile} />
+          <button type="button" className="upload-action" onClick={openCamera} disabled={isAnalyzing}>
+            카메라로 촬영
+          </button>
+        </div>
+        {cameraError && <p className="camera-error">{cameraError}</p>}
+        {isCameraOpen && (
+          <div className="camera-panel">
+            <video ref={videoRef} playsInline muted />
+            <div className="camera-actions">
+              <button type="button" onClick={captureCameraFrame}>
+                촬영하기
+              </button>
+              <button type="button" className="ghost-button" onClick={closeCamera}>
+                취소
+              </button>
+            </div>
+          </div>
+        )}
+        {previewUrl && (
+          <div className="mission-preview">
+            <img src={previewUrl} alt="업로드한 미션 사진" />
+          </div>
+        )}
+        {isAnalyzing && <div className="mission-result">유사도를 분석하는 중입니다.</div>}
+        {analysis && (
+          <div className={`mission-result ${analysis.passed ? "is-pass" : "is-fail"}`}>
+            <strong>유사도 {analysis.score}%</strong>
+            <p>{analysis.feedback}</p>
+            {analysis.coachTip && <p className="mission-coach-tip">{analysis.coachTip}</p>}
+            {analysis.passed && (
+              <button onClick={complete} disabled={isSaving}>
+                {isSaving ? "수집 중" : "컬렉션에 수집"}
+              </button>
+            )}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function CollectionPage({ artworks, session, openImage }: { artworks: Artwork[]; session: Session; openImage: (art: Artwork) => void }) {
+  const entries = [
+    ...session.state.collection.map((entry) => ({ ...entry, source: "일반" })),
+    ...session.state.missionCollection.map((entry) => ({ ...entry, source: "미션" })),
+    ...session.state.purchases.map((artworkId) => ({ artworkId, source: "보상" })),
+  ];
+  const collectedIds = unique(entries.map((entry) => entry.artworkId));
+  const collectedArtworks = collectedIds.flatMap((artworkId) => {
+    const artwork = artworks.find((item) => item.id === artworkId);
+    return artwork ? [artwork] : [];
+  });
+  const progress = collectionProgressFilters.map((filter) => {
+    const count = collectedArtworks.filter((art) => isArtworkMatch(art, filter)).length;
+    const target = artworks.filter((art) => !art.premium && isArtworkMatch(art, filter)).length;
+    return { filter, target, count };
+  });
+  const pointShopTarget = artworks.filter((art) => art.premium).length;
+  const pointShopProgress = {
+    filter: "포인트샵 수집",
+    target: pointShopTarget,
+    count: session.state.purchases.length,
+  };
+  const allProgress = [...progress.filter((item) => item.target > 0), pointShopProgress].filter((item) => item.target > 0);
+
+  return (
+    <section className="app-page is-active">
+      <div className="page-title">
+        <span className="eyebrow">COLLECTION</span>
+        <h1>내 컬렉션</h1>
+      </div>
+      <div className="collection-progress">
+        {allProgress.map((item) => {
+          const achieved = Math.min(item.count, item.target);
+          return (
+            <div key={item.filter} className="collection-progress-item">
+              <div>
+                <strong>{item.filter}</strong>
+                <span>
+                  {achieved}/{item.target}
+                </span>
+              </div>
+              <progress value={achieved} max={item.target} />
+            </div>
+          );
+        })}
+      </div>
+      {entries.length ? (
+        <>
+          <div className="collection-grid">
+            {entries.map((entry) => {
+              const art = artworks.find((item) => item.id === entry.artworkId);
+              return art ? <ArtCard key={`${entry.source}-${entry.artworkId}`} art={art} openImage={openImage} /> : null;
+            })}
+          </div>
+        </>
+      ) : (
+        <div className="collection-empty">
+          <div className="empty-art-mark">
+            <span />
+          </div>
+          <strong>아직 수집한 작품이 없습니다.</strong>
+          <p>오늘의 미션을 완료하거나 마음에 드는 작품을 컬렉션에 담아보세요.</p>
+          <div className="empty-actions">
+            <a className="primary-link" href="#artworks">
+              작품 소개 보기
+            </a>
+            <a className="ghost-button" href="#scan">
+              오늘 미션 보기
+            </a>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] }) {
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState({ scope: "전체", country: "전체", area: "전체", museumId: "전체" });
+  const [boardFilter, setBoardFilter] = useState<BoardFilter>("all");
+
+  const filteredPosts = posts.filter((post) => {
+    const text = `${post.title} ${post.body} ${post.museumName ?? ""}`.toLowerCase();
+    const museum = museums.find((item) => item.id === post.museumId);
+    const museumMatch =
+      (search.scope === "전체" || museum?.scope === search.scope) &&
+      (search.country === "전체" || museum?.country === search.country) &&
+      (search.area === "전체" || museum?.area === search.area) &&
+      (search.museumId === "전체" || post.museumId === search.museumId);
+    const boardMatch =
+      boardFilter === "all" ||
+      (boardFilter === "popular" ? post.upVotes >= 10 : (post.boardType ?? "free") === boardFilter);
+    return boardMatch && museumMatch && (!query || text.includes(query.toLowerCase()));
+  });
+
+  return (
+    <section className="app-page is-active board-page">
+      <div className="page-title board-title">
+        <div>
+          <span className="eyebrow">BOARD</span>
+          <h1>게시판</h1>
+        </div>
+        <a className="primary-link" href="#write">
+          글쓰기
+        </a>
+      </div>
+
+      <section className="board-shell">
+        <div className="board-tabs">
+          {boardTabs.map((tab) => (
+            <button key={tab.id} className={boardFilter === tab.id ? "is-active" : ""} onClick={() => setBoardFilter(tab.id)}>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="board-toolbar">
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="게시글 검색" />
+          <MuseumLocationPicker museums={museums} value={search} onChange={setSearch} allowAll />
+        </div>
+
+        <div className="board-list">
+          {filteredPosts.length ? (
+            filteredPosts.map((post) => (
+              <a className="board-row" key={post.id} href={`#post/${post.id}`}>
+                <div className="board-row-main">
+                  <div className="board-row-title">
+                    <strong>{post.title}</strong>
+                    <span>{boardTypeLabels[(post.boardType ?? "free") as BoardType]}</span>
+                    <span>{post.museumName}</span>
+                  </div>
+                  <p>{post.body}</p>
+                  <div className="post-meta">
+                    <span>{post.author}</span>
+                    <span>{new Date(post.createdAt).toLocaleString("ko-KR")}</span>
+                    <span>{post.museumCountry}</span>
+                  </div>
+                </div>
+                <div className="board-counts">
+                  <span>추천 {post.upVotes}</span>
+                  <span>댓글 {post.commentCount}</span>
+                </div>
+              </a>
+            ))
+          ) : (
+            <div className="board-empty">조건에 맞는 게시글이 없습니다.</div>
+          )}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function PostWritePage({
+  museums,
+  session,
+  setPosts,
+  showToast,
+}: {
+  museums: Museum[];
+  session: Session;
+  setPosts: (posts: Post[]) => void;
+  showToast: (message: string) => void;
+}) {
+  const [draft, setDraft] = useState({ scope: "", country: "", area: "", museumId: "" });
+  const [boardType, setBoardType] = useState<BoardType>("free");
+  const [withoutMuseum, setWithoutMuseum] = useState(false);
+
+  useEffect(() => {
+    if (withoutMuseum || !museums.length || draft.museumId) return;
+    const first = museums[0];
+    setDraft({ scope: first.scope, country: first.country, area: first.area, museumId: first.id });
+  }, [museums, draft.museumId, withoutMuseum]);
+
+  async function createPost(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session.user) {
+      window.location.hash = "#login";
+      showToast("로그인 후 작성할 수 있어요.");
+      return;
+    }
+    if (!withoutMuseum && !draft.museumId) {
+      showToast("미술관을 선택해주세요.");
+      return;
+    }
+    const form = new FormData(event.currentTarget);
+    const result = await api.createPost({
+      nickname: session.user.nickname,
+      title: String(form.get("title")),
+      body: String(form.get("body")),
+      museumId: withoutMuseum ? "__none__" : draft.museumId,
+      boardType,
+    });
+    setPosts(result.posts);
+    window.location.hash = "#community";
+    showToast("게시글을 등록했습니다.");
+  }
+
+  return (
+    <section className="app-page is-active post-detail-page write-page">
+      <a className="ghost-button back-link" href="#community">
+        게시판으로
+      </a>
+      <form className="post-form write-form" onSubmit={createPost}>
+        <div className="page-title">
+          <span className="eyebrow">WRITE</span>
+          <h1>글쓰기</h1>
+        </div>
+        <div className="write-board-tabs">
+          <button type="button" className={boardType === "free" ? "is-active" : ""} onClick={() => setBoardType("free")}>
+            자유게시판
+          </button>
+          <button type="button" className={boardType === "review" ? "is-active" : ""} onClick={() => setBoardType("review")}>
+            후기게시판
+          </button>
+        </div>
+        <input name="title" maxLength={36} placeholder="게시글 제목" required />
+        <textarea name="body" maxLength={240} rows={7} placeholder="미술관이나 작품에 대한 생각" required />
+        <label className="write-option">
+          <input
+            type="checkbox"
+            checked={withoutMuseum}
+            onChange={(event) => {
+              setWithoutMuseum(event.target.checked);
+            }}
+          />
+          미술관 태그 없이 작성
+        </label>
+        {!withoutMuseum && <MuseumLocationPicker museums={museums} value={draft} onChange={setDraft} />}
+        <button type="submit">등록</button>
+      </form>
+    </section>
+  );
+}
+
+function PostDetailPage({
+  postId,
+  session,
+  setPosts,
+  showToast,
+}: {
+  postId: string;
+  session: Session;
+  setPosts: (posts: Post[]) => void;
+  showToast: (message: string) => void;
+}) {
+  const [post, setPost] = useState<PostDetail | null>(null);
+  const [replyTo, setReplyTo] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editBody, setEditBody] = useState("");
+
+  useEffect(() => {
+    setPost(null);
+    setIsEditing(false);
+    void api.post(postId).then((result) => setPost(result.post));
+  }, [postId]);
+
+  async function vote(type: "up" | "down") {
+    if (!session.user) {
+      window.location.hash = "#login";
+      showToast("로그인 후 추천할 수 있어요.");
+      return;
+    }
+    try {
+      const result = await api.votePost(postId, { nickname: session.user.nickname, type });
+      setPost(result.post);
+      const refreshed = await api.posts();
+      setPosts(refreshed.posts);
+    } catch (error) {
+      showToast(error instanceof Error && error.message === "already_voted" ? "한 게시물에는 한 번만 추천하거나 비추천할 수 있어요." : "투표를 반영하지 못했어요.");
+    }
+  }
+
+  async function submitComment(event: FormEvent<HTMLFormElement>, parentId?: string) {
+    event.preventDefault();
+    if (!session.user) {
+      window.location.hash = "#login";
+      showToast("로그인 후 댓글을 달 수 있어요.");
+      return;
+    }
+    const form = new FormData(event.currentTarget);
+    const body = String(form.get("body")).trim();
+    if (!body) return;
+    const result = await api.createComment(postId, { nickname: session.user.nickname, body, parentId });
+    setPost(result.post);
+    setReplyTo(null);
+    event.currentTarget.reset();
+  }
+
+  async function deletePost() {
+    if (!session.user || !post || session.user.nickname !== post.author) return;
+    const confirmed = window.confirm("이 게시글을 삭제할까요?");
+    if (!confirmed) return;
+
+    try {
+      const result = await api.deletePost(post.id, session.user.nickname);
+      setPosts(result.posts);
+      window.location.hash = "#community";
+      showToast("게시글을 삭제했습니다.");
+    } catch {
+      showToast("게시글을 삭제하지 못했습니다.");
+    }
+  }
+
+  function startEditing() {
+    if (!post) return;
+    setEditTitle(post.title);
+    setEditBody(post.body);
+    setIsEditing(true);
+  }
+
+  async function updatePost(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session.user || !post || session.user.nickname !== post.author) return;
+
+    const title = editTitle.trim();
+    const body = editBody.trim();
+    if (!title || !body) {
+      showToast("제목과 내용을 입력해주세요.");
+      return;
+    }
+
+    try {
+      const result = await api.updatePost(post.id, { nickname: session.user.nickname, title, body });
+      setPost(result.post);
+      setIsEditing(false);
+      const refreshed = await api.posts();
+      setPosts(refreshed.posts);
+      showToast("게시글을 수정했습니다.");
+    } catch {
+      showToast("게시글을 수정하지 못했습니다.");
+    }
+  }
+
+  if (!post) {
+    return (
+      <section className="app-page is-active">
+        <div className="collection-empty">게시글을 불러오는 중입니다.</div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="app-page is-active post-detail-page">
+      <a className="ghost-button back-link" href="#community">
+        게시판으로
+      </a>
+      <article className="post-detail">
+        <div className="post-detail-top">
+          <div className="post-detail-meta">
+            <span className="board-badge">{boardTypeLabels[(post.boardType ?? "free") as BoardType]}게시판</span>
+            <span className="author-chip">
+              {post.author}
+              {post.authorTitle && <em>{post.authorTitle}</em>}
+            </span>
+            <span>{new Date(post.createdAt).toLocaleString("ko-KR")}</span>
+            <span>{post.museumName}</span>
+          </div>
+          {session.user?.nickname === post.author && (
+            <details className="post-action-menu">
+              <summary aria-label="게시글 메뉴">...</summary>
+              <div className="post-action-panel">
+                <button type="button" onClick={startEditing}>
+                  수정
+                </button>
+                <button type="button" className="is-danger" onClick={deletePost}>
+                  삭제
+                </button>
+              </div>
+            </details>
+          )}
+        </div>
+        {isEditing ? (
+          <form className="post-edit-form" onSubmit={updatePost}>
+            <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} maxLength={36} required />
+            <textarea value={editBody} onChange={(event) => setEditBody(event.target.value)} maxLength={240} rows={6} required />
+            <div className="post-edit-actions">
+              <button type="button" className="ghost-button" onClick={() => setIsEditing(false)}>
+                취소
+              </button>
+              <button type="submit">저장</button>
+            </div>
+          </form>
+        ) : (
+          <>
+            <h1>{post.title}</h1>
+            <p>{post.body}</p>
+            <div className="vote-row">
+              <button onClick={() => vote("up")}>추천 {post.upVotes}</button>
+              <button className="ghost-button" onClick={() => vote("down")}>
+                비추천 {post.downVotes}
+              </button>
+            </div>
+          </>
+        )}
+      </article>
+
+      <section className="comments-section">
+        <div className="section-heading">
+          <span className="eyebrow">COMMENTS</span>
+          <h2>댓글 {post.commentCount}</h2>
+        </div>
+        <CommentForm onSubmit={(event) => submitComment(event)} placeholder="댓글을 남겨보세요" />
+        <div className="comment-list">
+          {post.comments.map((comment) => (
+            <CommentItem
+              key={comment.id}
+              comment={comment}
+              replyTo={replyTo}
+              setReplyTo={setReplyTo}
+              submitComment={submitComment}
+            />
+          ))}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function CommentItem({
+  comment,
+  replyTo,
+  setReplyTo,
+  submitComment,
+}: {
+  comment: PostComment;
+  replyTo: string | null;
+  setReplyTo: (id: string | null) => void;
+  submitComment: (event: FormEvent<HTMLFormElement>, parentId?: string) => void;
+}) {
+  return (
+    <div className="comment-item">
+      <div className="comment-body">
+        <div className="post-meta">
+          <span className="author-chip is-compact">
+            {comment.author}
+            {comment.authorTitle && <em>{comment.authorTitle}</em>}
+          </span>
+          <span>{new Date(comment.createdAt).toLocaleString("ko-KR")}</span>
+        </div>
+        <p>{comment.body}</p>
+        <button className="ghost-button" onClick={() => setReplyTo(replyTo === comment.id ? null : comment.id)}>
+          답글
+        </button>
+      </div>
+      {replyTo === comment.id && <CommentForm onSubmit={(event) => submitComment(event, comment.id)} placeholder="답글을 남겨보세요" />}
+      {comment.replies.length > 0 && (
+        <div className="reply-list">
+          {comment.replies.map((reply) => (
+            <CommentItem key={reply.id} comment={reply} replyTo={replyTo} setReplyTo={setReplyTo} submitComment={submitComment} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CommentForm({ onSubmit, placeholder }: { onSubmit: (event: FormEvent<HTMLFormElement>) => void | Promise<void>; placeholder: string }) {
+  const [body, setBody] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    await onSubmit(event);
+    setBody("");
+  }
+
+  return (
+    <form className="comment-form" onSubmit={submit}>
+      <input name="body" value={body} onChange={(event) => setBody(event.target.value)} maxLength={240} placeholder={placeholder} required />
+      <button type="submit">등록</button>
+    </form>
+  );
+}
+
+function MuseumLocationPicker({
+  museums,
+  value,
+  onChange,
+  allowAll = false,
+}: {
+  museums: Museum[];
+  value: { scope: string; country: string; area: string; museumId: string };
+  onChange: (next: { scope: string; country: string; area: string; museumId: string }) => void;
+  allowAll?: boolean;
+}) {
+  const allLabel = "전체";
+  const scopes = unique(museums.map((museum) => museum.scope));
+  const scoped = museums.filter((museum) => allowAll && value.scope === allLabel ? true : museum.scope === value.scope);
+  const countries = unique(scoped.map((museum) => museum.country));
+  const countryFiltered = scoped.filter((museum) => allowAll && value.country === allLabel ? true : museum.country === value.country);
+  const areas = unique(countryFiltered.map((museum) => museum.area));
+  const areaFiltered = countryFiltered.filter((museum) => allowAll && value.area === allLabel ? true : museum.area === value.area);
+
+  function firstMuseum(nextMuseums: Museum[]) {
+    return allowAll ? allLabel : nextMuseums[0]?.id ?? "";
+  }
+
+  return (
+    <div className="museum-picker">
+      <select
+        value={value.scope || (allowAll ? allLabel : scopes[0] ?? "")}
+        onChange={(event) => {
+          const scope = event.target.value;
+          const nextScoped = museums.filter((museum) => allowAll && scope === allLabel ? true : museum.scope === scope);
+          const country = allowAll ? allLabel : nextScoped[0]?.country ?? "";
+          const area = allowAll ? allLabel : nextScoped.find((museum) => museum.country === country)?.area ?? "";
+          const nextMuseums = nextScoped.filter((museum) => (allowAll || museum.country === country) && (allowAll || museum.area === area));
+          onChange({ scope, country, area, museumId: firstMuseum(nextMuseums) });
+        }}
+      >
+        {allowAll && <option value={allLabel}>전체 구분</option>}
+        {scopes.map((scope) => (
+          <option key={scope} value={scope}>
+            {scope}
+          </option>
+        ))}
+      </select>
+      <select
+        value={value.country || (allowAll ? allLabel : countries[0] ?? "")}
+        onChange={(event) => {
+          const country = event.target.value;
+          const nextAreas = unique(scoped.filter((museum) => allowAll && country === allLabel ? true : museum.country === country).map((museum) => museum.area));
+          const area = allowAll ? allLabel : nextAreas[0] ?? "";
+          const nextMuseums = scoped.filter((museum) => (allowAll && country === allLabel ? true : museum.country === country) && (allowAll || museum.area === area));
+          onChange({ ...value, country, area, museumId: firstMuseum(nextMuseums) });
+        }}
+      >
+        {allowAll && <option value={allLabel}>전체 나라</option>}
+        {countries.map((country) => (
+          <option key={country} value={country}>
+            {country}
+          </option>
+        ))}
+      </select>
+      <select
+        value={value.area || (allowAll ? allLabel : areas[0] ?? "")}
+        onChange={(event) => {
+          const area = event.target.value;
+          const nextMuseums = countryFiltered.filter((museum) => allowAll && area === allLabel ? true : museum.area === area);
+          onChange({ ...value, area, museumId: firstMuseum(nextMuseums) });
+        }}
+      >
+        {allowAll && <option value={allLabel}>전체 지역</option>}
+        {areas.map((area) => (
+          <option key={area} value={area}>
+            {area}
+          </option>
+        ))}
+      </select>
+      <select value={value.museumId || (allowAll ? allLabel : areaFiltered[0]?.id ?? "")} onChange={(event) => onChange({ ...value, museumId: event.target.value })}>
+        {allowAll && <option value={allLabel}>전체 미술관</option>}
+        {areaFiltered.map((museum) => (
+          <option key={museum.id} value={museum.id}>
+            {museum.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function AuthPage({
+  mode,
+  updateSession,
+  showToast,
+}: {
+  mode: "login" | "signup";
+  updateSession: (session: Session) => void;
+  showToast: (message: string) => void;
+}) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const nickname = String(form.get("nickname")).trim();
+    const password = String(form.get("password"));
+    try {
+      const result = mode === "login" ? await api.login(nickname, password) : await api.signup(nickname, password);
+      updateSession(result);
+      window.location.hash = "#scan";
+      showToast(mode === "login" ? "로그인했습니다." : "가입을 환영합니다.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message === "login_failed") {
+        showToast("닉네임이나 비밀번호를 다시 확인해주세요.");
+        return;
+      }
+      if (message === "nickname_taken") {
+        showToast("이미 사용 중인 닉네임이에요.");
+        return;
+      }
+      if (message === "Bad Request" || message.includes("nickname") || message.includes("password")) {
+        showToast("닉네임은 1~7자, 비밀번호는 4자 이상으로 입력해주세요.");
+        return;
+      }
+      showToast(mode === "login" ? "로그인하지 못했어요." : "가입하지 못했어요.");
+    }
+  }
+
+  return (
+    <section className="app-page auth-page is-active">
+      <div className="auth-card">
+        <div className="page-title">
+          <span className="eyebrow">{mode === "login" ? "LOGIN" : "SIGN UP"}</span>
+          <h1>{mode === "login" ? "로그인" : "회원가입"}</h1>
+        </div>
+        <form className="auth-form" onSubmit={submit}>
+          <label>
+            <span>닉네임</span>
+            <input name="nickname" maxLength={7} required />
+          </label>
+          <label>
+            <span>비밀번호</span>
+            <input name="password" type="password" minLength={4} maxLength={64} required />
+          </label>
+          <button type="submit">{mode === "login" ? "로그인" : "가입하기"}</button>
+        </form>
+        <p className="auth-switch">
+          {mode === "login" ? "계정이 없다면" : "이미 계정이 있다면"}
+          <a href={mode === "login" ? "#signup" : "#login"}>{mode === "login" ? "회원가입" : "로그인"}</a>
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function ArtCard({
+  art,
+  action,
+  openImage,
+}: {
+  art: Artwork;
+  action?: ReactNode;
+  openImage: (art: Artwork) => void;
+}) {
+  const title = displayArtworkTitle(art);
+  return (
+    <article className="art-card">
+      <figure className="art-thumb" style={thumbStyle(art)}>
+        <button className="art-image-button" onClick={() => openImage(art)} aria-label={`${title} 이미지 확대`}>
+          <img
+            src={art.image || placeholder(art)}
+            onError={(event) => {
+              event.currentTarget.onerror = null;
+              event.currentTarget.src = placeholder(art);
+            }}
+            alt={title}
+            loading="lazy"
+          />
+        </button>
+        <figcaption>
+          {art.artist} · {translateArtworkText(art.year)}
+        </figcaption>
+      </figure>
+      <div className="art-body">
+        <div className="art-title-row">
+          <h3>{title}</h3>
+          {art.premium && <span className="cost-pill">{art.cost}P</span>}
+        </div>
+        <div className="art-meta">
+          {formatArtworkMeta(art)}
+        </div>
+        <div className="art-tags">
+          {displayArtworkTags(art).map((tag) => (
+            <span key={tag}>{tag}</span>
+          ))}
+        </div>
+        {action && <div className="card-actions">{action}</div>}
+      </div>
+    </article>
+  );
+}
+
+function ImageModal({ art, onClose }: { art: Artwork; onClose: () => void }) {
+  const title = displayArtworkTitle(art);
+  return (
+    <div className="image-modal is-visible">
+      <div className="image-modal-backdrop" onClick={onClose} />
+      <div className="image-modal-panel">
+        <button className="modal-close" onClick={onClose} aria-label="닫기">
+          ×
+        </button>
+        <img
+          src={art.image || placeholder(art)}
+          onError={(event) => {
+            event.currentTarget.onerror = null;
+            event.currentTarget.src = placeholder(art);
+          }}
+          alt={title}
+        />
+        <div>
+          <h2>{title}</h2>
+          <p>
+            {art.artist} · {translateArtworkText(art.year)} · {translateArtworkText(art.period)}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TitleGuideModal({ points, currentTitle, onClose }: { points: number; currentTitle: string; onClose: () => void }) {
+  return (
+    <div className="title-modal is-visible">
+      <button className="title-modal-backdrop" onClick={onClose} aria-label="칭호 안내 닫기" />
+      <section className="title-modal-panel">
+        <div className="mission-modal-header">
+          <div>
+            <span className="eyebrow">TITLE</span>
+            <h2>칭호 안내</h2>
+          </div>
+          <button className="ghost-button" onClick={onClose}>
+            닫기
+          </button>
+        </div>
+        <p className="title-guide-summary">
+          현재 칭호는 <strong>{currentTitle}</strong>이고, 누적 획득 포인트는 <strong>{points}P</strong>입니다.
+        </p>
+        <div className="title-guide-list">
+          {titleSteps.map(([minPoints, title]) => {
+            const unlocked = points >= minPoints;
+            return (
+              <div key={title} className={`title-guide-item ${unlocked ? "is-unlocked" : ""}`}>
+                <div>
+                  <strong>{title}</strong>
+                  <span>{minPoints}P 이상</span>
+                </div>
+                <em>{unlocked ? "해금됨" : `${minPoints - points}P 남음`}</em>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function isArtworkMatch(art: Artwork, filter: string) {
+  if (filter === "전체") return true;
+  const values = [art.origin, art.period, ...art.category, ...art.tags].flatMap((value) => [value, translateArtworkText(value)]);
+  return values.includes(filter);
+}
+
+function formatArtworkMeta(art: Artwork) {
+  return [art.origin, translateArtworkText(art.period), translateArtworkText(art.region)].filter(Boolean).join(" · ");
+}
+
+function displayArtworkTitle(art: Artwork) {
+  return art.title;
+}
+
+function displayArtworkTags(art: Artwork) {
+  const importedArtwork = art.id.startsWith("aic-") || art.id.startsWith("cma-");
+  const translatedCategories = art.category.map(translateArtworkText);
+  return unique(art.tags.map(translateArtworkText))
+    .filter((tag) => tag !== art.origin)
+    .filter((tag) => !importedArtwork || !translatedCategories.includes(tag))
+    .slice(0, 4);
+}
+
+function translateArtworkText(value: string) {
+  const text = value.trim();
+  if (!text) return text;
+
+  const direct = artworkTextTranslations[text.toLowerCase()];
+  if (direct) return direct;
+
+  const inferred = inferArtworkMediumText(text);
+  if (inferred) return inferred;
+
+  return artworkTextReplacements.reduce((current, [pattern, replacement]) => current.replace(pattern, replacement), text);
+}
+
+function inferArtworkMediumText(value: string) {
+  const text = value.toLowerCase();
+  if (text.includes("oil on canvas")) return "캔버스에 유채";
+  if (text.includes("oil on wood") || text.includes("oil on panel")) return "목판에 유채";
+  if (text.includes("oil on fabric")) return "천에 유채";
+  if (text.includes("oil on")) return "유채";
+  if (text.includes("pastel")) return "파스텔";
+  if (text.includes("woodblock")) return "목판화";
+  if (text.includes("engraving")) return "동판화";
+  if (text.includes("etching")) return "에칭";
+  if (text.includes("lithograph")) return "석판화";
+  if (text.includes("marble")) return "대리석";
+  if (text.includes("bronze")) return "청동";
+  if (text.includes("terracotta")) return "테라코타";
+  if (text.includes("ceramic") || text.includes("porcelain")) return "도자";
+  if (text.includes("ink") && text.includes("paper")) return "종이에 먹";
+  if (text.includes("mixed media")) return "혼합 매체";
+  if (text.includes("fabric") || text.includes("textile")) return "섬유";
+  return "";
+}
+
+function sortArtworks(left: Artwork, right: Artwork, mode: SortMode) {
+  const leftTitle = displayArtworkTitle(left);
+  const rightTitle = displayArtworkTitle(right);
+  if (mode === "year") return startYear(left.year) - startYear(right.year) || leftTitle.localeCompare(rightTitle, "ko-KR");
+  return leftTitle.localeCompare(rightTitle, "ko-KR") || startYear(left.year) - startYear(right.year);
+}
+
+function startYear(year: string) {
+  if (year.includes("기원전")) return -Number(year.match(/\d+/)?.[0] ?? 0);
+  if (year.includes("세기")) return Number(year.match(/\d+/)?.[0] ?? 1) * 100 - 50;
+  return Number(year.match(/\d+/)?.[0] ?? 9999);
+}
+
+function weeklySelection<T>(items: T[], count: number) {
+  if (items.length <= count) return items;
+  const now = new Date();
+  const weekKey = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / (7 * 24 * 60 * 60 * 1000));
+  const start = weekKey % items.length;
+  return Array.from({ length: count }, (_, index) => items[(start + index) % items.length]);
+}
+
+async function imageFileToMissionDataUrl(file: File) {
+  if (!file.type.startsWith("image/")) return readFileAsDataUrl(file);
+
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = await loadImage(objectUrl);
+    return imageToMissionDataUrl(image);
+  } catch {
+    return readFileAsDataUrl(file);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function videoFrameToDataUrl(video: HTMLVideoElement) {
+  const canvas = document.createElement("canvas");
+  const maxSize = 1280;
+  const scale = Math.min(1, maxSize / Math.max(video.videoWidth, video.videoHeight));
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("canvas_unavailable");
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.88);
+}
+
+function imageToMissionDataUrl(image: HTMLImageElement) {
+  const canvas = document.createElement("canvas");
+  const maxSize = 1280;
+  const scale = Math.min(1, maxSize / Math.max(image.naturalWidth, image.naturalHeight));
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("canvas_unavailable");
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.88);
+}
+
+function loadImage(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function unique(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function thumbStyle(art: Artwork) {
+  return {
+    "--thumb-a": rgb(art.palette),
+    "--thumb-b": rgb(secondColor(art.palette)),
+  } as CSSProperties;
+}
+
+function rgb(color: number[]) {
+  return `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+}
+
+function secondColor(color: number[]) {
+  return [
+    Math.min(255, Math.round(color[0] * 0.65 + 92)),
+    Math.min(255, Math.round(color[1] * 0.65 + 72)),
+    Math.min(255, Math.round(color[2] * 0.65 + 62)),
+  ];
+}
+
+function placeholder(art: Artwork) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="660"><rect width="900" height="660" fill="${rgb(art.palette)}"/><text x="70" y="120" font-size="44" fill="white" font-family="Arial">${escapeXml(displayArtworkTitle(art))}</text><text x="70" y="180" font-size="28" fill="white" font-family="Arial">${escapeXml(art.artist)}</text></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function escapeXml(value: string) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}

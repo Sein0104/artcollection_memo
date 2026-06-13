@@ -1,0 +1,173 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CollectionSource {
+  GENERAL
+  MISSION
+}
+
+model User {
+  id                String              @id @default(cuid())
+  nickname          String              @unique
+  passwordHash      String
+  passwordSalt      String
+  points            Int                 @default(40)
+  totalEarnedPoints Int                 @default(40)
+  installedRewardId String?
+  installedReward   Artwork?            @relation("InstalledReward", fields: [installedRewardId], references: [id])
+  collections       CollectionEntry[]
+  purchases         Purchase[]
+  posts             Post[]
+  comments          PostComment[]
+  postVotes         PostVote[]
+  missionCompletions MissionCompletion[]
+  missionAnalyses   MissionAnalysisRecord[]
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+}
+
+model Artwork {
+  id                String              @id
+  title             String
+  artist            String
+  year              String
+  origin            String
+  period            String
+  region            String
+  category          String[]
+  tags              String[]
+  palette           Int[]
+  image             String?
+  premium           Boolean             @default(false)
+  cost              Int                 @default(0)
+  featureVector     Json?
+  installedBy       User[]              @relation("InstalledReward")
+  collections       CollectionEntry[]
+  purchases         Purchase[]
+  missionCompletions MissionCompletion[]
+  missionAnalyses   MissionAnalysisRecord[]
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+}
+
+model Museum {
+  id        String   @id
+  name      String
+  scope     String
+  country   String   @default("")
+  area      String   @default("")
+  city      String
+  tags      String[]
+  posts     Post[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Post {
+  id        String   @id @default(cuid())
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  boardType String   @default("free")
+  museumId  String
+  museum    Museum   @relation(fields: [museumId], references: [id])
+  upVotes   Int      @default(0)
+  downVotes Int      @default(0)
+  comments  PostComment[]
+  votes     PostVote[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PostVote {
+  id        String   @id @default(cuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
+  @@index([userId])
+}
+
+model PostComment {
+  id        String        @id @default(cuid())
+  postId    String
+  post      Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parentId  String?
+  parent    PostComment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies   PostComment[] @relation("CommentReplies")
+  body      String
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([postId, parentId])
+}
+
+model CollectionEntry {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artworkId String
+  artwork   Artwork          @relation(fields: [artworkId], references: [id])
+  source    CollectionSource
+  missionKey String           @default("")
+  createdAt DateTime         @default(now())
+
+  @@unique([userId, artworkId, source, missionKey])
+}
+
+model Purchase {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artworkId String
+  artwork   Artwork  @relation(fields: [artworkId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([userId, artworkId])
+}
+
+model MissionCompletion {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artworkId String
+  artwork   Artwork  @relation(fields: [artworkId], references: [id])
+  missionKey String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, artworkId, missionKey])
+  @@index([userId, missionKey])
+}
+
+model MissionAnalysisRecord {
+  id           String   @id @default(cuid())
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  artworkId    String
+  artwork      Artwork  @relation(fields: [artworkId], references: [id])
+  mode         String
+  score        Int
+  passed       Boolean
+  feedback     String
+  coachTip     String   @default("")
+  analysisText String
+  aspects      Json?
+  embedding    Json?
+  createdAt    DateTime @default(now())
+
+  @@index([artworkId, mode])
+  @@index([createdAt])
+}

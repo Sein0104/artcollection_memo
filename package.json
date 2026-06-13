@@ -1,0 +1,22 @@
+{
+  "name": "artcatch-monorepo",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "dev:frontend": "npm run dev -w frontend",
+    "dev:backend": "npm run dev -w backend",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:migrate": "npm run prisma:deploy -w backend",
+    "db:seed": "npm run prisma:seed -w backend",
+    "db:setup": "npm run db:up && npm run db:migrate && npm run db:seed",
+    "artworks:import": "npm run import:artworks -w backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
