@@ -60,21 +60,31 @@ export class AuthService {
   }
 
   async stateFromCookie(cookieHeader?: string) {
+    try {
+      const user = await this.requireUserFromCookie(cookieHeader);
+      return this.sessionForUser(user.id);
+    } catch (error) {
+      if (error instanceof UnauthorizedException) return this.emptySession();
+      throw error;
+    }
+  }
+
+  async requireUserFromCookie(cookieHeader?: string) {
     const token = this.readCookie(cookieHeader, SESSION_COOKIE_NAME);
-    if (!token) return this.emptySession();
+    if (!token) throw new UnauthorizedException("login_required");
 
     const session = await this.prisma.authSession.findUnique({
       where: { tokenHash: this.hashToken(token) },
       include: { user: true },
     });
-    if (!session) return this.emptySession();
+    if (!session) throw new UnauthorizedException("login_required");
 
     if (session.expiresAt.getTime() <= Date.now()) {
       await this.prisma.authSession.delete({ where: { id: session.id } }).catch(() => undefined);
-      return this.emptySession();
+      throw new UnauthorizedException("login_required");
     }
 
-    return this.sessionForUser(session.userId);
+    return session.user;
   }
 
   startGoogleLogin() {

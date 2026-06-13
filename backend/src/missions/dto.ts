@@ -1,20 +1,11 @@
-import { IsIn, IsOptional, IsString, Length, Matches, MaxLength } from "class-validator";
+import { IsIn, IsOptional, IsString, Matches, MaxLength } from "class-validator";
 
 export class CompleteMissionDto {
-  @IsString()
-  @Length(1, 7)
-  nickname!: string;
-
   @IsString()
   artworkId!: string;
 }
 
 export class AnalyzeMissionDto {
-  @IsOptional()
-  @IsString()
-  @Length(1, 7)
-  nickname?: string;
-
   @IsString()
   artworkId!: string;
 

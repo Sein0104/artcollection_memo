@@ -234,11 +234,18 @@ export function App() {
       return;
     }
     try {
-      const result = await api.completeMission(session.user.nickname, artworkId);
+      const result = await api.completeMission(artworkId);
       updateState(result.state);
       showToast("미션을 완료하고 80P를 받았습니다.");
     } catch (error) {
-      showToast(error instanceof Error && error.message === "daily_mission_limit" ? "오늘 미션은 3개까지 가능합니다." : "미션을 완료하지 못했습니다.");
+      const message = error instanceof Error ? error.message : "";
+      showToast(
+        message === "daily_mission_limit"
+          ? "오늘 미션은 3개까지 가능합니다."
+          : message === "mission_analysis_required"
+            ? "AI 판정을 통과한 뒤 수집할 수 있어요."
+            : "미션을 완료하지 못했습니다.",
+      );
     }
   }
 
@@ -248,7 +255,7 @@ export function App() {
       showToast("로그인 후 교환할 수 있어요.");
       return;
     }
-    const result = await api.buyReward(session.user.nickname, artworkId);
+    const result = await api.buyReward(artworkId);
     updateState(result.state);
     showToast("보상 작품을 설치했습니다.");
   }
@@ -485,7 +492,6 @@ function ScanPage({
       {challengeArt && (
         <MissionChallengeModal
           art={challengeArt}
-          userNickname={session.user?.nickname}
           onClose={() => setChallengeArt(null)}
           onComplete={async () => {
             await onCompleteMission(challengeArt.id);
@@ -548,12 +554,10 @@ function ArtworksPage({
 
 function MissionChallengeModal({
   art,
-  userNickname,
   onClose,
   onComplete,
 }: {
   art: Artwork;
-  userNickname?: string;
   onClose: () => void;
   onComplete: () => Promise<void>;
 }) {
@@ -588,7 +592,7 @@ function MissionChallengeModal({
     setAnalysis(null);
     setIsAnalyzing(true);
     try {
-      setAnalysis(await api.analyzeMission(art.id, imageDataUrl, missionMode, userNickname));
+      setAnalysis(await api.analyzeMission(art.id, imageDataUrl, missionMode));
     } catch (error) {
       const message = error instanceof Error ? error.message : "ai_failed";
       setAnalysis({
@@ -938,7 +942,6 @@ function PostWritePage({
     }
     const form = new FormData(event.currentTarget);
     const result = await api.createPost({
-      nickname: session.user.nickname,
       title: String(form.get("title")),
       body: String(form.get("body")),
       museumId: withoutMuseum ? "__none__" : draft.museumId,
@@ -1016,7 +1019,7 @@ function PostDetailPage({
       return;
     }
     try {
-      const result = await api.votePost(postId, { nickname: session.user.nickname, type });
+      const result = await api.votePost(postId, { type });
       setPost(result.post);
       const refreshed = await api.posts();
       setPosts(refreshed.posts);
@@ -1035,7 +1038,7 @@ function PostDetailPage({
     const form = new FormData(event.currentTarget);
     const body = String(form.get("body")).trim();
     if (!body) return;
-    const result = await api.createComment(postId, { nickname: session.user.nickname, body, parentId });
+    const result = await api.createComment(postId, { body, parentId });
     setPost(result.post);
     setReplyTo(null);
     event.currentTarget.reset();
@@ -1047,7 +1050,7 @@ function PostDetailPage({
     if (!confirmed) return;
 
     try {
-      const result = await api.deletePost(post.id, session.user.nickname);
+      const result = await api.deletePost(post.id);
       setPosts(result.posts);
       window.location.hash = "#community";
       showToast("게시글을 삭제했습니다.");
@@ -1075,7 +1078,7 @@ function PostDetailPage({
     }
 
     try {
-      const result = await api.updatePost(post.id, { nickname: session.user.nickname, title, body });
+      const result = await api.updatePost(post.id, { title, body });
       setPost(result.post);
       setIsEditing(false);
       const refreshed = await api.posts();

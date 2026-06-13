@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma.service";
 import { AuthService } from "../auth/auth.service";
 import { RewardDto } from "./dto";
@@ -10,10 +10,8 @@ export class RewardsService {
     private readonly auth: AuthService,
   ) {}
 
-  async buy(dto: RewardDto) {
-    const user = await this.prisma.user.findUnique({ where: { nickname: dto.nickname } });
-    if (!user) throw new UnauthorizedException("login_required");
-
+  async buy(dto: RewardDto, cookieHeader?: string) {
+    const user = await this.auth.requireUserFromCookie(cookieHeader);
     const artwork = await this.prisma.artwork.findUnique({ where: { id: dto.artworkId } });
     if (!artwork || !artwork.premium) throw new BadRequestException("invalid_reward");
 
@@ -35,9 +33,8 @@ export class RewardsService {
     return { state: await this.auth.userState(user.id) };
   }
 
-  async install(dto: RewardDto) {
-    const user = await this.prisma.user.findUnique({ where: { nickname: dto.nickname } });
-    if (!user) throw new UnauthorizedException("login_required");
+  async install(dto: RewardDto, cookieHeader?: string) {
+    const user = await this.auth.requireUserFromCookie(cookieHeader);
     const purchase = await this.prisma.purchase.findUnique({
       where: { userId_artworkId: { userId: user.id, artworkId: dto.artworkId } },
     });

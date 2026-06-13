@@ -40,46 +40,44 @@ export const api = {
   me: () => request<Session>("/auth/me"),
   state: () => request<Session>("/auth/state"),
   logout: () => request<Session>("/auth/logout", { method: "POST" }),
-  buyReward: (nickname: string, artworkId: string) =>
-    request<{ state: UserState }>("/rewards/buy", { method: "POST", body: JSON.stringify({ nickname, artworkId }) }),
-  installReward: (nickname: string, artworkId: string) =>
-    request<{ state: UserState }>("/rewards/install", { method: "POST", body: JSON.stringify({ nickname, artworkId }) }),
+  buyReward: (artworkId: string) =>
+    request<{ state: UserState }>("/rewards/buy", { method: "POST", body: JSON.stringify({ artworkId }) }),
+  installReward: (artworkId: string) =>
+    request<{ state: UserState }>("/rewards/install", { method: "POST", body: JSON.stringify({ artworkId }) }),
   dailyMissions: () => request<DailyMissions>("/missions/daily"),
-  analyzeMission: (artworkId: string, imageDataUrl: string, mode: "capture" | "pose", nickname?: string) =>
+  analyzeMission: (artworkId: string, imageDataUrl: string, mode: "capture" | "pose") =>
     request<MissionAnalysis>("/missions/analyze", {
       method: "POST",
-      body: JSON.stringify({ artworkId, imageDataUrl, mode, nickname }),
+      body: JSON.stringify({ artworkId, imageDataUrl, mode }),
     }),
-  completeMission: (nickname: string, artworkId: string) =>
+  completeMission: (artworkId: string) =>
     request<{ state: UserState }>("/missions/complete", {
       method: "POST",
-      body: JSON.stringify({ nickname, artworkId }),
+      body: JSON.stringify({ artworkId }),
     }),
   createPost: (body: {
-    nickname: string;
     title: string;
     body: string;
     museumId: string;
     boardType: "free" | "review";
   }) => request<{ posts: Post[] }>("/posts", { method: "POST", body: JSON.stringify(body) }),
-  createComment: (postId: string, body: { nickname: string; body: string; parentId?: string }) =>
+  createComment: (postId: string, body: { body: string; parentId?: string }) =>
     request<{ post: PostDetail }>(`/posts/${encodeURIComponent(postId)}/comments`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  votePost: (postId: string, body: { nickname: string; type: "up" | "down" }) =>
+  votePost: (postId: string, body: { type: "up" | "down" }) =>
     request<{ post: PostDetail }>(`/posts/${encodeURIComponent(postId)}/vote`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  updatePost: (postId: string, body: { nickname: string; title: string; body: string }) =>
+  updatePost: (postId: string, body: { title: string; body: string }) =>
     request<{ post: PostDetail }>(`/posts/${encodeURIComponent(postId)}`, {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
-  deletePost: (postId: string, nickname: string) =>
+  deletePost: (postId: string) =>
     request<{ posts: Post[] }>(`/posts/${encodeURIComponent(postId)}`, {
       method: "DELETE",
-      body: JSON.stringify({ nickname }),
     }),
 };

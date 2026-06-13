@@ -1,6 +1,7 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma.service";
-import { CreateCommentDto, CreatePostDto, DeletePostDto, UpdatePostDto, VotePostDto } from "./dto";
+import { AuthService } from "../auth/auth.service";
+import { CreateCommentDto, CreatePostDto, UpdatePostDto, VotePostDto } from "./dto";
 
 const GENERAL_POST_MUSEUM_ID = "general-post";
 const TITLE_STEPS = [
@@ -17,7 +18,10 @@ const TITLE_STEPS = [
 
 @Injectable()
 export class PostsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auth: AuthService,
+  ) {}
 
   async list() {
     const posts = await this.prisma.post.findMany({
@@ -43,9 +47,8 @@ export class PostsService {
     return { post: this.toPostDetail(post) };
   }
 
-  async create(dto: CreatePostDto) {
-    const user = await this.prisma.user.findUnique({ where: { nickname: dto.nickname } });
-    if (!user) throw new UnauthorizedException("login_required");
+  async create(dto: CreatePostDto, cookieHeader?: string) {
+    const user = await this.auth.requireUserFromCookie(cookieHeader);
     const museumId = await this.resolveMuseumId(dto.museumId);
 
     await this.prisma.post.create({
@@ -61,9 +64,8 @@ export class PostsService {
     return this.list();
   }
 
-  async comment(postId: string, dto: CreateCommentDto) {
-    const user = await this.prisma.user.findUnique({ where: { nickname: dto.nickname } });
-    if (!user) throw new UnauthorizedException("login_required");
+  async comment(postId: string, dto: CreateCommentDto, cookieHeader?: string) {
+    const user = await this.auth.requireUserFromCookie(cookieHeader);
 
     const post = await this.prisma.post.findUnique({ where: { id: postId } });
     if (!post) throw new NotFoundException("post_not_found");
@@ -85,9 +87,8 @@ export class PostsService {
     return this.detail(postId);
   }
 
-  async vote(postId: string, dto: VotePostDto) {
-    const user = await this.prisma.user.findUnique({ where: { nickname: dto.nickname } });
-    if (!user) throw new UnauthorizedException("login_required");
+  async vote(postId: string, dto: VotePostDto, cookieHeader?: string) {
+    const user = await this.auth.requireUserFromCookie(cookieHeader);
 
     const post = await this.prisma.post.findUnique({ where: { id: postId } });
     if (!post) throw new NotFoundException("post_not_found");
@@ -119,9 +120,8 @@ export class PostsService {
     return this.detail(postId);
   }
 
-  async update(postId: string, dto: UpdatePostDto) {
-    const user = await this.prisma.user.findUnique({ where: { nickname: dto.nickname } });
-    if (!user) throw new UnauthorizedException("login_required");
+  async update(postId: string, dto: UpdatePostDto, cookieHeader?: string) {
+    const user = await this.auth.requireUserFromCookie(cookieHeader);
 
     const post = await this.prisma.post.findUnique({ where: { id: postId } });
     if (!post) throw new NotFoundException("post_not_found");
@@ -142,9 +142,8 @@ export class PostsService {
     return this.detail(postId);
   }
 
-  async remove(postId: string, dto: DeletePostDto) {
-    const user = await this.prisma.user.findUnique({ where: { nickname: dto.nickname } });
-    if (!user) throw new UnauthorizedException("login_required");
+  async remove(postId: string, cookieHeader?: string) {
+    const user = await this.auth.requireUserFromCookie(cookieHeader);
 
     const post = await this.prisma.post.findUnique({ where: { id: postId } });
     if (!post) throw new NotFoundException("post_not_found");

@@ -1,10 +1,6 @@
-import { IsString, Length } from "class-validator";
+import { IsString } from "class-validator";
 
 export class RewardDto {
-  @IsString()
-  @Length(1, 7)
-  nickname!: string;
-
   @IsString()
   artworkId!: string;
 }

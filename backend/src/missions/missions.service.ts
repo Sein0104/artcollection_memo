@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, ServiceUnavailableException, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, Injectable, ServiceUnavailableException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { CollectionSource } from "@prisma/client";
 import { readFile } from "node:fs/promises";
@@ -79,15 +79,9 @@ export class MissionsService {
     return { dateKey, missions: this.pickDailyMissions(artworks.map(withLocalArtworkImage), dateKey) };
   }
 
-  async complete(dto: CompleteMissionDto) {
-    const user = await this.prisma.user.findUnique({ where: { nickname: dto.nickname } });
-    if (!user) throw new UnauthorizedException("login_required");
-
-    const { missions } = await this.daily();
-    if (!missions.some((mission) => mission.id === dto.artworkId)) {
-      throw new BadRequestException("not_daily_mission");
-    }
-
+  async complete(dto: CompleteMissionDto, cookieHeader?: string) {
+    const user = await this.auth.requireUserFromCookie(cookieHeader);
+    await this.assertDailyMission(dto.artworkId);
     const missionKey = yyyyMmDd();
     const completionWhere = {
       userId_artworkId_missionKey: {
@@ -110,6 +104,13 @@ export class MissionsService {
 
     const completedCount = await this.prisma.missionCompletion.count({ where: { userId: user.id, missionKey } });
     if (completedCount >= 3) throw new BadRequestException("daily_mission_limit");
+
+    const passedAnalysis = await this.hasPassedMissionAnalysis({
+      userId: user.id,
+      artworkId: dto.artworkId,
+      missionKey,
+    });
+    if (!passedAnalysis) throw new BadRequestException("mission_analysis_required");
 
     await this.prisma.$transaction([
       this.prisma.missionCompletion.create({
@@ -140,7 +141,10 @@ export class MissionsService {
     return { state: await this.auth.userState(user.id) };
   }
 
-  async analyze(dto: AnalyzeMissionDto): Promise<MissionAnalysisResult> {
+  async analyze(dto: AnalyzeMissionDto, cookieHeader?: string): Promise<MissionAnalysisResult> {
+    const user = await this.auth.requireUserFromCookie(cookieHeader);
+    await this.assertDailyMission(dto.artworkId);
+
     const artwork = await this.prisma.artwork.findFirst({
       where: {
         AND: [{ id: dto.artworkId }, { id: { notIn: REMOVED_ARTWORK_IDS } }],
@@ -165,7 +169,7 @@ export class MissionsService {
     const coachTip = embedding ? await this.findCoachTip({ artworkId: reference.id, mode, embedding }) : "";
 
     await this.storeMissionAnalysis({
-      nickname: dto.nickname,
+      userId: user.id,
       artworkId: reference.id,
       mode,
       analysis: { ...analysis, analysisText, coachTip },
@@ -185,6 +189,46 @@ export class MissionsService {
     const seed = [...dateKey].reduce((sum, char) => sum + char.charCodeAt(0), 0);
     const start = seed % artworks.length;
     return [0, 1, 2].map((offset) => artworks[(start + offset) % artworks.length]);
+  }
+
+  private async assertDailyMission(artworkId: string) {
+    const { missions } = await this.daily();
+    if (!missions.some((mission) => mission.id === artworkId)) {
+      throw new BadRequestException("not_daily_mission");
+    }
+  }
+
+  private async hasPassedMissionAnalysis({
+    userId,
+    artworkId,
+    missionKey,
+  }: {
+    userId: string;
+    artworkId: string;
+    missionKey: string;
+  }) {
+    const { start, end } = this.missionDateRange(missionKey);
+    const record = await this.prisma.missionAnalysisRecord.findFirst({
+      where: {
+        userId,
+        artworkId,
+        passed: true,
+        createdAt: {
+          gte: start,
+          lt: end,
+        },
+      },
+      select: { id: true },
+    });
+    return Boolean(record);
+  }
+
+  private missionDateRange(missionKey: string) {
+    const start = new Date(`${missionKey}T00:00:00.000Z`);
+    return {
+      start,
+      end: new Date(start.getTime() + 24 * 60 * 60 * 1000),
+    };
   }
 
   private analysisToRetrievalText({
@@ -274,21 +318,21 @@ export class MissionsService {
   }
 
   private async storeMissionAnalysis({
-    nickname,
+    userId,
     artworkId,
     mode,
     analysis,
     embedding,
   }: {
-    nickname?: string;
+    userId: string;
     artworkId: string;
     mode: MissionMode;
     analysis: MissionAnalysisResult;
     embedding: number[] | null;
   }) {
     try {
-      const user = nickname ? await this.prisma.user.findUnique({ where: { nickname } }) : null;
       const data: Record<string, unknown> = {
+        userId,
         artworkId,
         mode,
         score: analysis.score,
@@ -297,7 +341,6 @@ export class MissionsService {
         coachTip: analysis.coachTip ?? "",
         analysisText: analysis.analysisText ?? analysis.feedback,
       };
-      if (user) data.userId = user.id;
       if (analysis.aspects) data.aspects = analysis.aspects;
       if (embedding) data.embedding = embedding;
 

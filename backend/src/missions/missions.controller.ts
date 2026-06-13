@@ -1,6 +1,12 @@
-import { Body, Controller, Get, Post } from "@nestjs/common";
+import { Body, Controller, Get, Post, Req } from "@nestjs/common";
 import { AnalyzeMissionDto, CompleteMissionDto } from "./dto";
 import { MissionsService } from "./missions.service";
+
+type RequestWithCookie = {
+  headers: {
+    cookie?: string;
+  };
+};
 
 @Controller("missions")
 export class MissionsController {
@@ -12,12 +18,12 @@ export class MissionsController {
   }
 
   @Post("complete")
-  complete(@Body() body: CompleteMissionDto) {
-    return this.missions.complete(body);
+  complete(@Body() body: CompleteMissionDto, @Req() request: RequestWithCookie) {
+    return this.missions.complete(body, request.headers.cookie);
   }
 
   @Post("analyze")
-  analyze(@Body() body: AnalyzeMissionDto) {
-    return this.missions.analyze(body);
+  analyze(@Body() body: AnalyzeMissionDto, @Req() request: RequestWithCookie) {
+    return this.missions.analyze(body, request.headers.cookie);
   }
 }
