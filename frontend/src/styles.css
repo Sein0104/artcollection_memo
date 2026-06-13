@@ -1185,6 +1185,11 @@ main {
   gap: 14px;
 }
 
+.google-login-link {
+  min-height: 46px;
+  width: 100%;
+}
+
 .auth-form label {
   display: grid;
   gap: 7px;
@@ -1197,6 +1202,11 @@ main {
   margin: 16px 0 0;
   color: var(--muted);
   text-align: center;
+}
+
+.callback-url {
+  overflow-wrap: anywhere;
+  font-size: 12px;
 }
 
 .image-modal {

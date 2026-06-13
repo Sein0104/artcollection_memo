@@ -5,6 +5,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
@@ -30,15 +31,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  googleLoginUrl: () => `${API_BASE}/auth/google`,
+  googleStatus: () => request<{ configured: boolean; callbackUrl: string }>("/auth/google/status"),
   artworks: () => request<{ artworks: Artwork[] }>("/artworks"),
   museums: () => request<{ museums: Museum[] }>("/museums"),
   posts: () => request<{ posts: Post[] }>("/posts"),
   post: (id: string) => request<{ post: PostDetail }>(`/posts/${encodeURIComponent(id)}`),
-  signup: (nickname: string, password: string) =>
-    request<Session>("/auth/signup", { method: "POST", body: JSON.stringify({ nickname, password }) }),
-  login: (nickname: string, password: string) =>
-    request<Session>("/auth/login", { method: "POST", body: JSON.stringify({ nickname, password }) }),
-  state: (nickname: string) => request<Session>(`/auth/state?nickname=${encodeURIComponent(nickname)}`),
+  me: () => request<Session>("/auth/me"),
+  state: () => request<Session>("/auth/state"),
+  logout: () => request<Session>("/auth/logout", { method: "POST" }),
   buyReward: (nickname: string, artworkId: string) =>
     request<{ state: UserState }>("/rewards/buy", { method: "POST", body: JSON.stringify({ nickname, artworkId }) }),
   installReward: (nickname: string, artworkId: string) =>

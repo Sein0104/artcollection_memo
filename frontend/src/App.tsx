@@ -158,7 +158,7 @@ const boardTypeLabels: Record<BoardType, string> = {
 function routeFromHash() {
   const value = window.location.hash.replace("#", "");
   if (value.startsWith("post/")) return value;
-  return ["scan", "artworks", "collection", "community", "write", "login", "signup"].includes(value) ? value : "scan";
+  return ["scan", "artworks", "collection", "community", "write", "login"].includes(value) ? value : "scan";
 }
 
 export function App() {
@@ -199,15 +199,8 @@ export function App() {
       setPosts(postResult.posts);
       setDaily(missionResult);
 
-      const nickname = localStorage.getItem("artcatch-react-session");
-      if (nickname) {
-        try {
-          const restored = await api.state(nickname);
-          setSession(restored);
-        } catch {
-          localStorage.removeItem("artcatch-react-session");
-        }
-      }
+      const restored = await api.me();
+      setSession(restored);
     } catch (error) {
       setBootstrapError(error instanceof Error ? error.message : "api_error");
     } finally {
@@ -220,13 +213,18 @@ export function App() {
     window.setTimeout(() => setToast(""), 2200);
   }
 
-  function updateSession(next: Session) {
-    setSession(next);
-    if (next.user) localStorage.setItem("artcatch-react-session", next.user.nickname);
-  }
-
   function updateState(state: UserState) {
     setSession((current) => ({ ...current, state }));
+  }
+
+  async function logout() {
+    try {
+      const result = await api.logout();
+      setSession(result);
+    } catch {
+      setSession({ user: null, state: emptyState });
+    }
+    showToast("로그아웃했습니다.");
   }
 
   async function completeMission(artworkId: string) {
@@ -281,24 +279,14 @@ export function App() {
           {session.user ? (
             <div className="user-pill">
               <span>{session.user.nickname}</span>
-              <button
-                className="ghost-button"
-                onClick={() => {
-                  localStorage.removeItem("artcatch-react-session");
-                  setSession({ user: null, state: emptyState });
-                  showToast("로그아웃했습니다.");
-                }}
-              >
+              <button className="ghost-button" onClick={() => void logout()}>
                 로그아웃
               </button>
             </div>
           ) : (
             <div className="auth-buttons">
-              <a className="ghost-button" href="#login">
-                로그인
-              </a>
-              <a className="primary-link" href="#signup">
-                회원가입
+              <a className="primary-link" href="#login">
+                Google 로그인
               </a>
             </div>
           )}
@@ -347,8 +335,7 @@ export function App() {
         {route === "community" && <CommunityPage museums={museums} posts={posts} />}
         {route === "write" && <PostWritePage museums={museums} session={session} setPosts={setPosts} showToast={showToast} />}
         {postId && <PostDetailPage postId={postId} session={session} setPosts={setPosts} showToast={showToast} />}
-        {route === "login" && <AuthPage mode="login" updateSession={updateSession} showToast={showToast} />}
-        {route === "signup" && <AuthPage mode="signup" updateSession={updateSession} showToast={showToast} />}
+        {route === "login" && <AuthPage />}
       </main>
 
       {selectedImage && <ImageModal art={selectedImage} onClose={() => setSelectedImage(null)} />}
@@ -1325,65 +1312,43 @@ function MuseumLocationPicker({
   );
 }
 
-function AuthPage({
-  mode,
-  updateSession,
-  showToast,
-}: {
-  mode: "login" | "signup";
-  updateSession: (session: Session) => void;
-  showToast: (message: string) => void;
-}) {
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const nickname = String(form.get("nickname")).trim();
-    const password = String(form.get("password"));
-    try {
-      const result = mode === "login" ? await api.login(nickname, password) : await api.signup(nickname, password);
-      updateSession(result);
-      window.location.hash = "#scan";
-      showToast(mode === "login" ? "로그인했습니다." : "가입을 환영합니다.");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "";
-      if (message === "login_failed") {
-        showToast("닉네임이나 비밀번호를 다시 확인해주세요.");
-        return;
-      }
-      if (message === "nickname_taken") {
-        showToast("이미 사용 중인 닉네임이에요.");
-        return;
-      }
-      if (message === "Bad Request" || message.includes("nickname") || message.includes("password")) {
-        showToast("닉네임은 1~7자, 비밀번호는 4자 이상으로 입력해주세요.");
-        return;
-      }
-      showToast(mode === "login" ? "로그인하지 못했어요." : "가입하지 못했어요.");
-    }
-  }
+function AuthPage() {
+  const [googleStatus, setGoogleStatus] = useState<{ configured: boolean; callbackUrl: string } | null>(null);
+
+  useEffect(() => {
+    void api.googleStatus().then(setGoogleStatus).catch(() => setGoogleStatus({ configured: false, callbackUrl: "" }));
+  }, []);
+
+  const googleReady = googleStatus?.configured ?? false;
 
   return (
     <section className="app-page auth-page is-active">
       <div className="auth-card">
         <div className="page-title">
-          <span className="eyebrow">{mode === "login" ? "LOGIN" : "SIGN UP"}</span>
-          <h1>{mode === "login" ? "로그인" : "회원가입"}</h1>
+          <span className="eyebrow">LOGIN</span>
+          <h1>Google 로그인</h1>
         </div>
-        <form className="auth-form" onSubmit={submit}>
-          <label>
-            <span>닉네임</span>
-            <input name="nickname" maxLength={7} required />
-          </label>
-          <label>
-            <span>비밀번호</span>
-            <input name="password" type="password" minLength={4} maxLength={64} required />
-          </label>
-          <button type="submit">{mode === "login" ? "로그인" : "가입하기"}</button>
-        </form>
+        <div className="auth-form">
+          {googleReady ? (
+            <a className="primary-link google-login-link" href={api.googleLoginUrl()}>
+              Google 계정으로 계속하기
+            </a>
+          ) : (
+            <button className="primary-link google-login-link" type="button" disabled>
+              Google 설정 필요
+            </button>
+          )}
+        </div>
         <p className="auth-switch">
-          {mode === "login" ? "계정이 없다면" : "이미 계정이 있다면"}
-          <a href={mode === "login" ? "#signup" : "#login"}>{mode === "login" ? "회원가입" : "로그인"}</a>
+          {googleReady
+            ? "로그인하면 서버 세션으로 ArtCatch 계정이 연결됩니다."
+            : "backend/.env에 GOOGLE_CLIENT_ID와 GOOGLE_CLIENT_SECRET을 설정해주세요."}
         </p>
+        {!googleReady && googleStatus?.callbackUrl && (
+          <p className="auth-switch callback-url">
+            Redirect URI: {googleStatus.callbackUrl}
+          </p>
+        )}
       </div>
     </section>
   );

@@ -66,7 +66,7 @@ export type UserState = {
 };
 
 export type Session = {
-  user: { id?: string; nickname: string } | null;
+  user: { id?: string; nickname: string; email?: string | null; avatarUrl?: string | null } | null;
   state: UserState;
 };
 
