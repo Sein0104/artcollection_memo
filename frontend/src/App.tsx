@@ -567,6 +567,7 @@ function MissionChallengeModal({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isLimitHelpOpen, setIsLimitHelpOpen] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -598,12 +599,7 @@ function MissionChallengeModal({
       setAnalysis({
         score: 0,
         passed: false,
-        feedback:
-          message === "openai_api_key_required"
-            ? "AI 판정을 쓰려면 백엔드 .env에 OPENAI_API_KEY를 먼저 설정해주세요."
-            : message.includes("valid image")
-              ? "이미지 파일을 읽지 못했습니다. JPG나 PNG 사진으로 다시 시도해주세요."
-              : `AI 유사도 판정에 실패했습니다. ${message}`,
+        feedback: missionAnalysisErrorMessage(message),
       });
     } finally {
       setIsAnalyzing(false);
@@ -714,11 +710,32 @@ function MissionChallengeModal({
           <button type="button" className="upload-action" onClick={openFilePicker} disabled={isAnalyzing}>
             이미지 업로드
           </button>
-          <input ref={fileInputRef} className="mission-file-input" type="file" accept="image/*" onChange={handleFile} />
+          <input ref={fileInputRef} className="mission-file-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={handleFile} />
           <button type="button" className="upload-action" onClick={openCamera} disabled={isAnalyzing}>
             카메라로 촬영
           </button>
+          <button
+            type="button"
+            className="mission-limit-help-button"
+            aria-expanded={isLimitHelpOpen}
+            aria-label="AI 판정 제한 안내"
+            onClick={() => setIsLimitHelpOpen((current) => !current)}
+          >
+            ?
+          </button>
         </div>
+        {isLimitHelpOpen && (
+          <div className="mission-limit-help">
+            <strong>AI 판정 제한</strong>
+            <ul>
+              <li>하루 전체 AI 판정은 최대 15회까지 가능해요.</li>
+              <li>같은 작품은 하루 최대 5회까지 판정할 수 있어요.</li>
+              <li>AI 판정은 15초에 한 번만 요청할 수 있어요.</li>
+              <li>이미지는 최대 3MB까지 사용할 수 있어요.</li>
+              <li>JPG, JPEG, PNG, WEBP만 지원하고 GIF는 지원하지 않아요.</li>
+            </ul>
+          </div>
+        )}
         {cameraError && <p className="camera-error">{cameraError}</p>}
         {isCameraOpen && (
           <div className="camera-panel">
@@ -1544,6 +1561,31 @@ function weeklySelection<T>(items: T[], count: number) {
   const weekKey = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / (7 * 24 * 60 * 60 * 1000));
   const start = weekKey % items.length;
   return Array.from({ length: count }, (_, index) => items[(start + index) % items.length]);
+}
+
+function missionAnalysisErrorMessage(message: string) {
+  if (message === "openai_api_key_required") {
+    return "AI 판정을 쓰려면 백엔드 .env에 OPENAI_API_KEY를 먼저 설정해주세요.";
+  }
+  if (message === "mission_analysis_daily_limit") {
+    return "오늘 AI 판정 횟수를 모두 사용했어요. 내일 다시 도전해주세요.";
+  }
+  if (message === "mission_analysis_artwork_limit") {
+    return "이 작품은 오늘 AI 판정 5회를 모두 사용했어요.";
+  }
+  if (message === "mission_analysis_cooldown") {
+    return "AI 판정은 15초에 한 번만 요청할 수 있어요. 잠시 후 다시 시도해주세요.";
+  }
+  if (message === "mission_image_too_large") {
+    return "이미지가 너무 커요. 더 작은 사진으로 다시 시도해주세요.";
+  }
+  if (message === "mission_image_invalid_type" || message === "mission_image_invalid" || message.includes("valid image")) {
+    return "이미지 파일을 읽지 못했습니다. JPG, PNG, WEBP 사진으로 다시 시도해주세요.";
+  }
+  if (message === "openai_timeout") {
+    return "AI 판정 시간이 너무 오래 걸렸어요. 잠시 후 다시 시도해주세요.";
+  }
+  return `AI 유사도 판정에 실패했습니다. ${message}`;
 }
 
 async function imageFileToMissionDataUrl(file: File) {

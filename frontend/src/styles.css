@@ -871,6 +871,7 @@ main {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
 }
 
 .upload-action {
@@ -894,6 +895,52 @@ main {
   clip: rect(0 0 0 0);
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+.mission-limit-help-button {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: #fffaf4;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0;
+}
+
+.mission-limit-help-button[aria-expanded="true"] {
+  border-color: #d8b49b;
+  background: #fff3e9;
+  color: #9f3f2a;
+}
+
+.mission-limit-help {
+  display: grid;
+  gap: 7px;
+  border: 1px solid #ead8c9;
+  border-radius: 8px;
+  background: #fffaf4;
+  padding: 12px 13px;
+  color: var(--ink);
+}
+
+.mission-limit-help strong {
+  font-size: 14px;
+}
+
+.mission-limit-help ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .camera-error {

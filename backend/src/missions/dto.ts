@@ -14,7 +14,7 @@ export class AnalyzeMissionDto {
   mode?: "capture" | "pose";
 
   @IsString()
-  @MaxLength(10_500_000)
-  @Matches(/^data:image\/(png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i)
+  @MaxLength(4_194_304)
+  @Matches(/^data:image\/(png|jpe?g|webp);base64,[a-z0-9+/=]+$/i)
   imageDataUrl!: string;
 }

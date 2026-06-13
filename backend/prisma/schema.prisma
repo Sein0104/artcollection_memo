@@ -13,27 +13,28 @@ enum CollectionSource {
 }
 
 model User {
-  id                String              @id @default(cuid())
-  nickname          String              @unique
-  googleId          String?             @unique
-  email             String?             @unique
-  avatarUrl         String?
-  passwordHash      String
-  passwordSalt      String
-  points            Int                 @default(40)
-  totalEarnedPoints Int                 @default(40)
-  installedRewardId String?
-  installedReward   Artwork?            @relation("InstalledReward", fields: [installedRewardId], references: [id])
-  sessions          AuthSession[]
-  collections       CollectionEntry[]
-  purchases         Purchase[]
-  posts             Post[]
-  comments          PostComment[]
-  postVotes         PostVote[]
-  missionCompletions MissionCompletion[]
-  missionAnalyses   MissionAnalysisRecord[]
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
+  id                      String                   @id @default(cuid())
+  nickname                String                   @unique
+  googleId                String?                  @unique
+  email                   String?                  @unique
+  avatarUrl               String?
+  passwordHash            String
+  passwordSalt            String
+  points                  Int                      @default(40)
+  totalEarnedPoints       Int                      @default(40)
+  installedRewardId       String?
+  installedReward         Artwork?                 @relation("InstalledReward", fields: [installedRewardId], references: [id])
+  sessions                AuthSession[]
+  collections             CollectionEntry[]
+  purchases               Purchase[]
+  posts                   Post[]
+  comments                PostComment[]
+  postVotes               PostVote[]
+  missionCompletions      MissionCompletion[]
+  missionAnalyses         MissionAnalysisRecord[]
+  missionAnalysisAttempts MissionAnalysisAttempt[]
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
 }
 
 model AuthSession {
@@ -50,27 +51,28 @@ model AuthSession {
 }
 
 model Artwork {
-  id                String              @id
-  title             String
-  artist            String
-  year              String
-  origin            String
-  period            String
-  region            String
-  category          String[]
-  tags              String[]
-  palette           Int[]
-  image             String?
-  premium           Boolean             @default(false)
-  cost              Int                 @default(0)
-  featureVector     Json?
-  installedBy       User[]              @relation("InstalledReward")
-  collections       CollectionEntry[]
-  purchases         Purchase[]
-  missionCompletions MissionCompletion[]
-  missionAnalyses   MissionAnalysisRecord[]
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
+  id                      String                   @id
+  title                   String
+  artist                  String
+  year                    String
+  origin                  String
+  period                  String
+  region                  String
+  category                String[]
+  tags                    String[]
+  palette                 Int[]
+  image                   String?
+  premium                 Boolean                  @default(false)
+  cost                    Int                      @default(0)
+  featureVector           Json?
+  installedBy             User[]                   @relation("InstalledReward")
+  collections             CollectionEntry[]
+  purchases               Purchase[]
+  missionCompletions      MissionCompletion[]
+  missionAnalyses         MissionAnalysisRecord[]
+  missionAnalysisAttempts MissionAnalysisAttempt[]
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
 }
 
 model Museum {
@@ -87,20 +89,20 @@ model Museum {
 }
 
 model Post {
-  id        String   @id @default(cuid())
+  id        String        @id @default(cuid())
   authorId  String
-  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  author    User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
   title     String
   body      String
-  boardType String   @default("free")
+  boardType String        @default("free")
   museumId  String
-  museum    Museum   @relation(fields: [museumId], references: [id])
-  upVotes   Int      @default(0)
-  downVotes Int      @default(0)
+  museum    Museum        @relation(fields: [museumId], references: [id])
+  upVotes   Int           @default(0)
+  downVotes Int           @default(0)
   comments  PostComment[]
   votes     PostVote[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
 }
 
 model PostVote {
@@ -133,14 +135,14 @@ model PostComment {
 }
 
 model CollectionEntry {
-  id        String           @id @default(cuid())
-  userId    String
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  artworkId String
-  artwork   Artwork          @relation(fields: [artworkId], references: [id])
-  source    CollectionSource
+  id         String           @id @default(cuid())
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artworkId  String
+  artwork    Artwork          @relation(fields: [artworkId], references: [id])
+  source     CollectionSource
   missionKey String           @default("")
-  createdAt DateTime         @default(now())
+  createdAt  DateTime         @default(now())
 
   @@unique([userId, artworkId, source, missionKey])
 }
@@ -157,13 +159,13 @@ model Purchase {
 }
 
 model MissionCompletion {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  artworkId String
-  artwork   Artwork  @relation(fields: [artworkId], references: [id])
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artworkId  String
+  artwork    Artwork  @relation(fields: [artworkId], references: [id])
   missionKey String
-  createdAt DateTime @default(now())
+  createdAt  DateTime @default(now())
 
   @@unique([userId, artworkId, missionKey])
   @@index([userId, missionKey])
@@ -187,4 +189,20 @@ model MissionAnalysisRecord {
 
   @@index([artworkId, mode])
   @@index([createdAt])
+}
+
+model MissionAnalysisAttempt {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artworkId String?
+  artwork   Artwork? @relation(fields: [artworkId], references: [id], onDelete: SetNull)
+  status    String
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([userId, artworkId, createdAt])
+  @@index([status, createdAt])
 }

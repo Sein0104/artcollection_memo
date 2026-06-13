@@ -11,6 +11,15 @@ import { AnalyzeMissionDto, CompleteMissionDto } from "./dto";
 
 const MISSION_PASS_THRESHOLD = 62;
 const EMBEDDING_SIMILARITY_THRESHOLD = 0.74;
+const MISSION_ANALYSIS_DAILY_LIMIT = 15;
+const MISSION_ANALYSIS_ARTWORK_DAILY_LIMIT = 5;
+const MISSION_ANALYSIS_COOLDOWN_MS = 15_000;
+const MISSION_IMAGE_DATA_URL_MAX_LENGTH = 4 * 1024 * 1024;
+const MISSION_IMAGE_BYTES_MAX = 3 * 1024 * 1024;
+const OPENAI_VISION_TIMEOUT_MS = 60_000;
+const OPENAI_EMBEDDING_TIMEOUT_MS = 20_000;
+const MISSION_IMAGE_DATA_URL_PATTERN = /^data:image\/(png|jpe?g|webp);base64,([a-z0-9+/=]+)$/i;
+const COST_COUNTED_ANALYSIS_STATUSES = ["started", "succeeded", "failed"];
 const MISSION_ANALYSIS_JSON_SCHEMA = {
   type: "object",
   properties: {
@@ -144,6 +153,15 @@ export class MissionsService {
   async analyze(dto: AnalyzeMissionDto, cookieHeader?: string): Promise<MissionAnalysisResult> {
     const user = await this.auth.requireUserFromCookie(cookieHeader);
     await this.assertDailyMission(dto.artworkId);
+    await this.enforceMissionAnalysisLimits({
+      userId: user.id,
+      artworkId: dto.artworkId,
+    });
+    await this.assertMissionImageDataUrl({
+      userId: user.id,
+      artworkId: dto.artworkId,
+      imageDataUrl: dto.imageDataUrl,
+    });
 
     const artwork = await this.prisma.artwork.findFirst({
       where: {
@@ -157,31 +175,43 @@ export class MissionsService {
     if (!reference.image) throw new BadRequestException("artwork_image_missing");
 
     const mode = dto.mode ?? "capture";
-    const referenceImageUrl = await this.artworkImageToModelInput(reference.image);
-    const analysis = await this.analyzeWithOpenAI({
-      artwork: reference,
-      mode,
-      referenceImageUrl,
-      userImageDataUrl: dto.imageDataUrl,
-    });
-    const analysisText = this.analysisToRetrievalText({ artwork: reference, mode, analysis });
-    const embedding = await this.createEmbeddingSafely(analysisText);
-    const coachTip = embedding ? await this.findCoachTip({ artworkId: reference.id, mode, embedding }) : "";
-
-    await this.storeMissionAnalysis({
+    const attempt = await this.recordMissionAnalysisAttempt({
       userId: user.id,
       artworkId: reference.id,
-      mode,
-      analysis: { ...analysis, analysisText, coachTip },
-      embedding,
+      status: "started",
     });
 
-    return {
-      score: analysis.score,
-      passed: analysis.passed,
-      feedback: analysis.feedback,
-      coachTip,
-    };
+    try {
+      const referenceImageUrl = await this.artworkImageToModelInput(reference.image);
+      const analysis = await this.analyzeWithOpenAI({
+        artwork: reference,
+        mode,
+        referenceImageUrl,
+        userImageDataUrl: dto.imageDataUrl,
+      });
+      const analysisText = this.analysisToRetrievalText({ artwork: reference, mode, analysis });
+      const embedding = await this.createEmbeddingSafely(analysisText);
+      const coachTip = embedding ? await this.findCoachTip({ artworkId: reference.id, mode, embedding }) : "";
+
+      await this.storeMissionAnalysis({
+        userId: user.id,
+        artworkId: reference.id,
+        mode,
+        analysis: { ...analysis, analysisText, coachTip },
+        embedding,
+      });
+      await this.updateMissionAnalysisAttempt(attempt.id, "succeeded");
+
+      return {
+        score: analysis.score,
+        passed: analysis.passed,
+        feedback: analysis.feedback,
+        coachTip,
+      };
+    } catch (error) {
+      await this.updateMissionAnalysisAttempt(attempt.id, "failed", this.analysisFailureReason(error));
+      throw error;
+    }
   }
 
   private pickDailyMissions<T extends { id: string }>(artworks: T[], dateKey: string) {
@@ -231,6 +261,122 @@ export class MissionsService {
     };
   }
 
+  private async enforceMissionAnalysisLimits({ userId, artworkId }: { userId: string; artworkId: string }) {
+    const cooldownSince = new Date(Date.now() - MISSION_ANALYSIS_COOLDOWN_MS);
+    const recentAttempt = await this.prisma.missionAnalysisAttempt.findFirst({
+      where: {
+        userId,
+        createdAt: { gte: cooldownSince },
+      },
+      select: { id: true },
+      orderBy: { createdAt: "desc" },
+    });
+    if (recentAttempt) {
+      await this.blockMissionAnalysisAttempt({ userId, artworkId, reason: "mission_analysis_cooldown" });
+    }
+
+    const { start, end } = this.missionDateRange(yyyyMmDd());
+    const countedAttemptWhere = {
+      userId,
+      status: { in: COST_COUNTED_ANALYSIS_STATUSES },
+      createdAt: { gte: start, lt: end },
+    };
+    const [dailyCount, artworkCount] = await Promise.all([
+      this.prisma.missionAnalysisAttempt.count({ where: countedAttemptWhere }),
+      this.prisma.missionAnalysisAttempt.count({ where: { ...countedAttemptWhere, artworkId } }),
+    ]);
+
+    if (dailyCount >= MISSION_ANALYSIS_DAILY_LIMIT) {
+      await this.blockMissionAnalysisAttempt({ userId, artworkId, reason: "mission_analysis_daily_limit" });
+    }
+    if (artworkCount >= MISSION_ANALYSIS_ARTWORK_DAILY_LIMIT) {
+      await this.blockMissionAnalysisAttempt({ userId, artworkId, reason: "mission_analysis_artwork_limit" });
+    }
+  }
+
+  private async assertMissionImageDataUrl({
+    userId,
+    artworkId,
+    imageDataUrl,
+  }: {
+    userId: string;
+    artworkId: string;
+    imageDataUrl: string;
+  }) {
+    if (imageDataUrl.length > MISSION_IMAGE_DATA_URL_MAX_LENGTH) {
+      await this.blockMissionAnalysisAttempt({ userId, artworkId, reason: "mission_image_too_large" });
+    }
+
+    const match = imageDataUrl.match(MISSION_IMAGE_DATA_URL_PATTERN);
+    if (!match) {
+      return await this.blockMissionAnalysisAttempt({ userId, artworkId, reason: "mission_image_invalid_type" });
+    }
+
+    const base64 = match[2];
+    if (base64.length % 4 !== 0) {
+      return await this.blockMissionAnalysisAttempt({ userId, artworkId, reason: "mission_image_invalid" });
+    }
+
+    const byteLength = Buffer.byteLength(base64, "base64");
+    if (byteLength > MISSION_IMAGE_BYTES_MAX) {
+      return await this.blockMissionAnalysisAttempt({ userId, artworkId, reason: "mission_image_too_large" });
+    }
+  }
+
+  private async blockMissionAnalysisAttempt({
+    userId,
+    artworkId,
+    reason,
+  }: {
+    userId: string;
+    artworkId: string;
+    reason: string;
+  }): Promise<never> {
+    await this.recordMissionAnalysisAttempt({ userId, artworkId, status: "blocked", reason });
+    throw new BadRequestException(reason);
+  }
+
+  private recordMissionAnalysisAttempt({
+    userId,
+    artworkId,
+    status,
+    reason,
+  }: {
+    userId: string;
+    artworkId?: string;
+    status: string;
+    reason?: string;
+  }) {
+    return this.prisma.missionAnalysisAttempt.create({
+      data: {
+        userId,
+        artworkId,
+        status,
+        reason,
+      },
+      select: { id: true },
+    });
+  }
+
+  private async updateMissionAnalysisAttempt(id: string, status: string, reason?: string) {
+    await this.prisma.missionAnalysisAttempt.update({
+      where: { id },
+      data: { status, reason },
+    });
+  }
+
+  private analysisFailureReason(error: unknown) {
+    if (error instanceof ServiceUnavailableException || error instanceof BadRequestException) {
+      const response = error.getResponse();
+      if (typeof response === "string") return response;
+      const message = (response as { message?: unknown }).message;
+      if (typeof message === "string") return message;
+      if (Array.isArray(message) && typeof message[0] === "string") return message[0];
+    }
+    if (error instanceof Error && error.message) return error.message.slice(0, 120);
+    return "mission_analysis_failed";
+  }
+
   private analysisToRetrievalText({
     artwork,
     mode,
@@ -262,17 +408,21 @@ export class MissionsService {
     if (!apiKey) return null;
 
     try {
-      const response = await fetch("https://api.openai.com/v1/embeddings", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
+      const response = await this.fetchWithTimeout(
+        "https://api.openai.com/v1/embeddings",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: this.config.get<string>("OPENAI_EMBEDDING_MODEL") || "text-embedding-3-small",
+            input: text,
+          }),
         },
-        body: JSON.stringify({
-          model: this.config.get<string>("OPENAI_EMBEDDING_MODEL") || "text-embedding-3-small",
-          input: text,
-        }),
-      });
+        OPENAI_EMBEDDING_TIMEOUT_MS,
+      );
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (!response.ok) return null;
 
@@ -330,24 +480,20 @@ export class MissionsService {
     analysis: MissionAnalysisResult;
     embedding: number[] | null;
   }) {
-    try {
-      const data: Record<string, unknown> = {
-        userId,
-        artworkId,
-        mode,
-        score: analysis.score,
-        passed: analysis.passed,
-        feedback: analysis.feedback,
-        coachTip: analysis.coachTip ?? "",
-        analysisText: analysis.analysisText ?? analysis.feedback,
-      };
-      if (analysis.aspects) data.aspects = analysis.aspects;
-      if (embedding) data.embedding = embedding;
+    const data: Record<string, unknown> = {
+      userId,
+      artworkId,
+      mode,
+      score: analysis.score,
+      passed: analysis.passed,
+      feedback: analysis.feedback,
+      coachTip: analysis.coachTip ?? "",
+      analysisText: analysis.analysisText ?? analysis.feedback,
+    };
+    if (analysis.aspects) data.aspects = analysis.aspects;
+    if (embedding) data.embedding = embedding;
 
-      await this.prisma.missionAnalysisRecord.create({ data: data as any });
-    } catch {
-      // The mission result should still be shown even if coach history cannot be stored yet.
-    }
+    await this.prisma.missionAnalysisRecord.create({ data: data as any });
   }
 
   private toVector(value: unknown) {
@@ -412,37 +558,41 @@ export class MissionsService {
       "analysisText and aspects must be useful for retrieving similar past success or failure patterns later.",
     ].join("\n");
 
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: [
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: prompt },
-              { type: "input_text", text: "Reference artwork image:" },
-              { type: "input_image", image_url: referenceImageUrl, detail: "high" },
-              { type: "input_text", text: "User submitted photo:" },
-              { type: "input_image", image_url: userImageDataUrl, detail: "high" },
-            ],
-          },
-        ],
-        text: {
-          format: {
-            type: "json_schema",
-            name: "mission_analysis",
-            strict: true,
-            schema: MISSION_ANALYSIS_JSON_SCHEMA,
-          },
+    const response = await this.fetchWithTimeout(
+      "https://api.openai.com/v1/responses",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
         },
-        max_output_tokens: 700,
-      }),
-    });
+        body: JSON.stringify({
+          model,
+          input: [
+            {
+              role: "user",
+              content: [
+                { type: "input_text", text: prompt },
+                { type: "input_text", text: "Reference artwork image:" },
+                { type: "input_image", image_url: referenceImageUrl, detail: "high" },
+                { type: "input_text", text: "User submitted photo:" },
+                { type: "input_image", image_url: userImageDataUrl, detail: "high" },
+              ],
+            },
+          ],
+          text: {
+            format: {
+              type: "json_schema",
+              name: "mission_analysis",
+              strict: true,
+              schema: MISSION_ANALYSIS_JSON_SCHEMA,
+            },
+          },
+          max_output_tokens: 700,
+        }),
+      },
+      OPENAI_VISION_TIMEOUT_MS,
+    );
 
     const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
     if (!response.ok) {
@@ -472,6 +622,21 @@ export class MissionsService {
     if (ext === ".png") return "image/png";
     if (ext === ".webp") return "image/webp";
     return "image/jpeg";
+  }
+
+  private async fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new ServiceUnavailableException("openai_timeout");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private openAiErrorMessage(payload: Record<string, unknown>) {
