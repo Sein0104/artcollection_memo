@@ -3,7 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import { CollectionSource } from "@prisma/client";
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
-import { yyyyMmDd } from "../common/date";
+import { addDaysToDateKey, missionDateRangeForKey, yyyyMmDd } from "../common/date";
 import { PrismaService } from "../prisma.service";
 import { AuthService } from "../auth/auth.service";
 import { REMOVED_ARTWORK_IDS, withLocalArtworkImage } from "../artworks/image-overrides";
@@ -14,8 +14,13 @@ const EMBEDDING_SIMILARITY_THRESHOLD = 0.74;
 const MISSION_ANALYSIS_DAILY_LIMIT = 15;
 const MISSION_ANALYSIS_ARTWORK_DAILY_LIMIT = 5;
 const MISSION_ANALYSIS_COOLDOWN_MS = 15_000;
+const DAILY_MISSION_COUNT = 3;
+const RECENT_MISSION_EXCLUSION_DAYS = 3;
+const MISSION_ROTATION_ANCHOR_DATE_KEY = "2026-01-01";
 const MISSION_IMAGE_DATA_URL_MAX_LENGTH = 4 * 1024 * 1024;
 const MISSION_IMAGE_BYTES_MAX = 3 * 1024 * 1024;
+const REFERENCE_IMAGE_BYTES_MAX = 8 * 1024 * 1024;
+const REFERENCE_IMAGE_FETCH_TIMEOUT_MS = 20_000;
 const OPENAI_VISION_TIMEOUT_MS = 60_000;
 const OPENAI_EMBEDDING_TIMEOUT_MS = 20_000;
 const MISSION_IMAGE_DATA_URL_PATTERN = /^data:image\/(png|jpe?g|webp);base64,([a-z0-9+/=]+)$/i;
@@ -215,10 +220,61 @@ export class MissionsService {
   }
 
   private pickDailyMissions<T extends { id: string }>(artworks: T[], dateKey: string) {
-    if (artworks.length <= 3) return artworks;
-    const seed = [...dateKey].reduce((sum, char) => sum + char.charCodeAt(0), 0);
-    const start = seed % artworks.length;
-    return [0, 1, 2].map((offset) => artworks[(start + offset) % artworks.length]);
+    if (artworks.length <= DAILY_MISSION_COUNT) return artworks;
+    if (dateKey < MISSION_ROTATION_ANCHOR_DATE_KEY) {
+      return this.pickDailyMissionsForDate(artworks, dateKey, new Set());
+    }
+
+    const selections = new Map<string, T[]>();
+    for (
+      let currentDateKey = MISSION_ROTATION_ANCHOR_DATE_KEY;
+      currentDateKey <= dateKey;
+      currentDateKey = addDaysToDateKey(currentDateKey, 1)
+    ) {
+      const recentlyUsedIds = new Set<string>();
+      for (let dayOffset = 1; dayOffset <= RECENT_MISSION_EXCLUSION_DAYS; dayOffset += 1) {
+        const previousDateKey = addDaysToDateKey(currentDateKey, -dayOffset);
+        for (const mission of selections.get(previousDateKey) ?? []) {
+          recentlyUsedIds.add(mission.id);
+        }
+      }
+      selections.set(currentDateKey, this.pickDailyMissionsForDate(artworks, currentDateKey, recentlyUsedIds));
+    }
+
+    return selections.get(dateKey) ?? [];
+  }
+
+  private pickDailyMissionsForDate<T extends { id: string }>(artworks: T[], dateKey: string, excludedIds: Set<string>) {
+    const missionCount = Math.min(DAILY_MISSION_COUNT, artworks.length);
+    const eligible = artworks.filter((artwork) => !excludedIds.has(artwork.id));
+    const selected = this.seededShuffle(eligible, dateKey).slice(0, missionCount);
+    if (selected.length >= missionCount) return selected;
+
+    const selectedIds = new Set(selected.map((artwork) => artwork.id));
+    const fallback = this.seededShuffle(
+      artworks.filter((artwork) => !selectedIds.has(artwork.id)),
+      `${dateKey}:fallback`,
+    );
+    return [...selected, ...fallback].slice(0, missionCount);
+  }
+
+  private seededShuffle<T extends { id: string }>(items: T[], seed: string) {
+    return items
+      .map((item, index) => ({
+        item,
+        score: this.seededHash(`${seed}:${item.id}:${index}`),
+      }))
+      .sort((left, right) => left.score - right.score || left.item.id.localeCompare(right.item.id))
+      .map(({ item }) => item);
+  }
+
+  private seededHash(input: string) {
+    let hash = 2166136261;
+    for (let index = 0; index < input.length; index += 1) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
   }
 
   private async assertDailyMission(artworkId: string) {
@@ -237,7 +293,7 @@ export class MissionsService {
     artworkId: string;
     missionKey: string;
   }) {
-    const { start, end } = this.missionDateRange(missionKey);
+    const { start, end } = missionDateRangeForKey(missionKey);
     const record = await this.prisma.missionAnalysisRecord.findFirst({
       where: {
         userId,
@@ -251,14 +307,6 @@ export class MissionsService {
       select: { id: true },
     });
     return Boolean(record);
-  }
-
-  private missionDateRange(missionKey: string) {
-    const start = new Date(`${missionKey}T00:00:00.000Z`);
-    return {
-      start,
-      end: new Date(start.getTime() + 24 * 60 * 60 * 1000),
-    };
   }
 
   private async enforceMissionAnalysisLimits({ userId, artworkId }: { userId: string; artworkId: string }) {
@@ -275,7 +323,7 @@ export class MissionsService {
       await this.blockMissionAnalysisAttempt({ userId, artworkId, reason: "mission_analysis_cooldown" });
     }
 
-    const { start, end } = this.missionDateRange(yyyyMmDd());
+    const { start, end } = missionDateRangeForKey(yyyyMmDd());
     const countedAttemptWhere = {
       userId,
       status: { in: COST_COUNTED_ANALYSIS_STATUSES },
@@ -605,7 +653,7 @@ export class MissionsService {
   }
 
   private async artworkImageToModelInput(imagePath: string) {
-    if (imagePath.startsWith("https://")) return imagePath;
+    if (imagePath.startsWith("https://")) return this.remoteArtworkImageToDataUrl(imagePath);
     if (!imagePath.startsWith("/artworks/")) throw new BadRequestException("artwork_image_not_local");
 
     const workspaceRoot = process.cwd().endsWith("backend") ? resolve(process.cwd(), "..") : process.cwd();
@@ -615,6 +663,42 @@ export class MissionsService {
 
     const bytes = await readFile(resolvedPath);
     return `data:${this.mimeTypeFor(resolvedPath)};base64,${bytes.toString("base64")}`;
+  }
+
+  private async remoteArtworkImageToDataUrl(imageUrl: string) {
+    const response = await this.fetchWithTimeout(
+      imageUrl,
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+          Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+          "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+          Referer: new URL(imageUrl).origin,
+        },
+      },
+      REFERENCE_IMAGE_FETCH_TIMEOUT_MS,
+    );
+    if (!response.ok) {
+      throw new ServiceUnavailableException(`artwork_image_download_failed_${response.status}`);
+    }
+
+    const mimeType = this.imageMimeTypeFromContentType(response.headers.get("content-type"));
+    if (!mimeType) throw new ServiceUnavailableException("artwork_image_invalid_type");
+
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > REFERENCE_IMAGE_BYTES_MAX) throw new ServiceUnavailableException("artwork_image_too_large");
+
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.byteLength > REFERENCE_IMAGE_BYTES_MAX) throw new ServiceUnavailableException("artwork_image_too_large");
+
+    return `data:${mimeType};base64,${bytes.toString("base64")}`;
+  }
+
+  private imageMimeTypeFromContentType(contentType: string | null) {
+    const mimeType = contentType?.split(";")[0]?.trim().toLowerCase();
+    if (mimeType === "image/jpeg" || mimeType === "image/png" || mimeType === "image/webp") return mimeType;
+    return "";
   }
 
   private mimeTypeFor(path: string) {

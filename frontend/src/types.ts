@@ -81,3 +81,8 @@ export type MissionAnalysis = {
   feedback: string;
   coachTip?: string;
 };
+
+export type AiDocentResponse = {
+  answer: string;
+  suggestedArtworks: Artwork[];
+};

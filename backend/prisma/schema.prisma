@@ -71,6 +71,7 @@ model Artwork {
   missionCompletions      MissionCompletion[]
   missionAnalyses         MissionAnalysisRecord[]
   missionAnalysisAttempts MissionAnalysisAttempt[]
+  knowledgeEntries        ArtworkKnowledge[]
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
 }
@@ -189,6 +190,21 @@ model MissionAnalysisRecord {
 
   @@index([artworkId, mode])
   @@index([createdAt])
+}
+
+model ArtworkKnowledge {
+  id         String   @id @default(cuid())
+  artworkId  String
+  artwork    Artwork  @relation(fields: [artworkId], references: [id], onDelete: Cascade)
+  text       String
+  embedding  Json?
+  sourceType String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([artworkId, sourceType])
+  @@index([artworkId])
+  @@index([sourceType])
 }
 
 model MissionAnalysisAttempt {

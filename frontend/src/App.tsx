@@ -17,6 +17,7 @@ const tabs = [
   { id: "artworks", label: "작품 소개" },
   { id: "collection", label: "내 컬렉션" },
   { id: "community", label: "게시판" },
+  { id: "docent", label: "AI 도슨트" },
 ];
 
 const titleSteps = [
@@ -38,6 +39,19 @@ type SortMode = "name" | "year";
 type BoardType = "free" | "review";
 type BoardFilter = "all" | BoardType | "popular";
 type MissionMode = "capture" | "pose";
+type DocentChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  suggestedArtworks?: Artwork[];
+};
+
+const docentQuickPrompts = [
+  "노을이나 하늘 느낌으로 따라 찍기 좋은 작품 추천해줘",
+  "초보자가 미션하기 쉬운 작품을 알려줘",
+  "강한 색감이 인상적인 작품을 찾아줘",
+  "조용한 분위기의 작품을 설명해줘",
+];
 
 const artworkTextTranslations: Record<string, string> = {
   "american painting and sculpture": "미국 회화·조각",
@@ -158,7 +172,7 @@ const boardTypeLabels: Record<BoardType, string> = {
 function routeFromHash() {
   const value = window.location.hash.replace("#", "");
   if (value.startsWith("post/")) return value;
-  return ["scan", "artworks", "collection", "community", "write", "login"].includes(value) ? value : "scan";
+  return ["scan", "artworks", "collection", "community", "docent", "write", "login"].includes(value) ? value : "scan";
 }
 
 export function App() {
@@ -340,6 +354,7 @@ export function App() {
         {route === "artworks" && <ArtworksPage artworks={artworks} openImage={setSelectedImage} />}
         {route === "collection" && <CollectionPage artworks={artworks} session={session} openImage={setSelectedImage} />}
         {route === "community" && <CommunityPage museums={museums} posts={posts} />}
+        {route === "docent" && <AiDocentPage session={session} openImage={setSelectedImage} showToast={showToast} />}
         {route === "write" && <PostWritePage museums={museums} session={session} setPosts={setPosts} showToast={showToast} />}
         {postId && <PostDetailPage postId={postId} session={session} setPosts={setPosts} showToast={showToast} />}
         {route === "login" && <AuthPage />}
@@ -920,6 +935,132 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
             <div className="board-empty">조건에 맞는 게시글이 없습니다.</div>
           )}
         </div>
+      </section>
+    </section>
+  );
+}
+
+function AiDocentPage({
+  session,
+  openImage,
+  showToast,
+}: {
+  session: Session;
+  openImage: (art: Artwork) => void;
+  showToast: (message: string) => void;
+}) {
+  const [messages, setMessages] = useState<DocentChatMessage[]>([
+    {
+      id: "intro",
+      role: "assistant",
+      text: "궁금한 작품 분위기나 촬영하고 싶은 느낌을 말해보세요. 작품 데이터에서 관련 정보를 찾아 답할게요.",
+    },
+  ]);
+  const [input, setInput] = useState("");
+  const [isAsking, setIsAsking] = useState(false);
+  const chatRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const chat = chatRef.current;
+    if (!chat) return;
+    chat.scrollTo({ top: chat.scrollHeight, behavior: "smooth" });
+  }, [messages, isAsking]);
+
+  async function askDocent(messageText = input) {
+    const message = messageText.trim();
+    if (!message || isAsking) return;
+    if (!session.user) {
+      window.location.hash = "#login";
+      showToast("로그인 후 AI 도슨트에게 질문할 수 있어요.");
+      return;
+    }
+
+    const userMessage: DocentChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      text: message,
+    };
+    setMessages((current) => [...current, userMessage]);
+    setInput("");
+    setIsAsking(true);
+
+    try {
+      const response = await api.askDocent(message);
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          text: response.answer,
+          suggestedArtworks: response.suggestedArtworks,
+        },
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "ai_docent_failed";
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          text: aiDocentErrorMessage(message),
+        },
+      ]);
+    } finally {
+      setIsAsking(false);
+    }
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void askDocent();
+  }
+
+  return (
+    <section className="app-page is-active docent-page">
+      <div className="page-title board-title">
+        <div>
+          <span className="eyebrow">AI DOCENT</span>
+          <h1>AI 도슨트</h1>
+        </div>
+      </div>
+
+      <section className="docent-shell">
+        <div className="docent-prompts">
+          {docentQuickPrompts.map((prompt) => (
+            <button key={prompt} type="button" className="chip" disabled={isAsking} onClick={() => void askDocent(prompt)}>
+              {prompt}
+            </button>
+          ))}
+        </div>
+
+        <div ref={chatRef} className="docent-chat" aria-live="polite">
+          {messages.map((message) => (
+            <div key={message.id} className={`docent-message is-${message.role}`}>
+              <p>{message.text}</p>
+              {message.suggestedArtworks && message.suggestedArtworks.length > 0 && (
+                <div className="docent-suggestions">
+                  {message.suggestedArtworks.map((art) => (
+                    <button key={art.id} type="button" className="docent-suggestion" onClick={() => openImage(art)}>
+                      <img src={art.image || placeholder(art)} alt={displayArtworkTitle(art)} />
+                      <span>
+                        <strong>{displayArtworkTitle(art)}</strong>
+                        <em>{art.artist}</em>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+          {isAsking && <div className="docent-loading">작품 지식을 찾는 중입니다.</div>}
+        </div>
+
+        <form className="docent-input" onSubmit={submit}>
+          <input value={input} onChange={(event) => setInput(event.target.value)} maxLength={500} placeholder="작품, 분위기, 미션 아이디어를 물어보세요" />
+          <button type="submit" disabled={isAsking || !input.trim()}>
+            질문
+          </button>
+        </form>
       </section>
     </section>
   );
@@ -1586,6 +1727,19 @@ function missionAnalysisErrorMessage(message: string) {
     return "AI 판정 시간이 너무 오래 걸렸어요. 잠시 후 다시 시도해주세요.";
   }
   return `AI 유사도 판정에 실패했습니다. ${message}`;
+}
+
+function aiDocentErrorMessage(message: string) {
+  if (message === "openai_api_key_required") {
+    return "AI 도슨트를 쓰려면 백엔드 .env에 OPENAI_API_KEY를 먼저 설정해주세요.";
+  }
+  if (message === "openai_timeout") {
+    return "AI 도슨트 답변 시간이 너무 오래 걸렸어요. 잠시 후 다시 시도해주세요.";
+  }
+  if (message === "login_required") {
+    return "로그인 후 AI 도슨트에게 질문할 수 있어요.";
+  }
+  return `AI 도슨트가 답변하지 못했습니다. ${message}`;
 }
 
 async function imageFileToMissionDataUrl(file: File) {

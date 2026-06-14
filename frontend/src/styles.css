@@ -725,6 +725,125 @@ main {
   text-align: center;
 }
 
+.docent-page {
+  max-width: 1040px;
+  margin: 0 auto;
+}
+
+.docent-shell {
+  display: grid;
+  grid-template-rows: auto minmax(320px, 1fr) auto;
+  gap: 14px;
+}
+
+.docent-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.docent-prompts .chip {
+  text-align: left;
+}
+
+.docent-chat {
+  display: grid;
+  gap: 12px;
+  height: clamp(320px, calc(100dvh - 360px), 640px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  padding: 16px;
+  align-content: start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.docent-message {
+  display: grid;
+  gap: 10px;
+  max-width: 82%;
+}
+
+.docent-message p,
+.docent-loading {
+  margin: 0;
+  border-radius: 8px;
+  padding: 12px 14px;
+  line-height: 1.65;
+}
+
+.docent-message.is-user {
+  justify-self: end;
+}
+
+.docent-message.is-user p {
+  background: var(--sage);
+  color: white;
+}
+
+.docent-message.is-assistant {
+  justify-self: start;
+}
+
+.docent-message.is-assistant p,
+.docent-loading {
+  background: #f7faf7;
+  color: var(--ink);
+}
+
+.docent-suggestions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.docent-suggestion {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 70px;
+  border: 1px solid var(--line);
+  background: #fffdfb;
+  color: var(--ink);
+  padding: 8px;
+  text-align: left;
+}
+
+.docent-suggestion img {
+  width: 54px;
+  height: 54px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.docent-suggestion span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.docent-suggestion strong,
+.docent-suggestion em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docent-suggestion em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.docent-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
 .write-form {
   width: min(100%, 860px);
   justify-self: center;
@@ -1403,6 +1522,15 @@ main {
   }
 
   .board-row {
+    grid-template-columns: 1fr;
+  }
+
+  .docent-message {
+    max-width: 100%;
+  }
+
+  .docent-suggestions,
+  .docent-input {
     grid-template-columns: 1fr;
   }
 

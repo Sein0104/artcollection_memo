@@ -1,4 +1,4 @@
-import type { Artwork, DailyMissions, MissionAnalysis, Museum, Post, PostDetail, Session, UserState } from "./types";
+import type { AiDocentResponse, Artwork, DailyMissions, MissionAnalysis, Museum, Post, PostDetail, Session, UserState } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -79,5 +79,10 @@ export const api = {
   deletePost: (postId: string) =>
     request<{ posts: Post[] }>(`/posts/${encodeURIComponent(postId)}`, {
       method: "DELETE",
+    }),
+  askDocent: (message: string) =>
+    request<AiDocentResponse>("/ai-docent/chat", {
+      method: "POST",
+      body: JSON.stringify({ message }),
     }),
 };
