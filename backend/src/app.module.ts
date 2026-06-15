@@ -17,6 +17,8 @@ import { MissionsController } from "./missions/missions.controller";
 import { MissionsService } from "./missions/missions.service";
 import { AiDocentController } from "./ai-docent/ai-docent.controller";
 import { AiDocentService } from "./ai-docent/ai-docent.service";
+import { ExternalSearchController } from "./external-search/external-search.controller";
+import { ExternalSearchService } from "./external-search/external-search.service";
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true })],
@@ -29,6 +31,7 @@ import { AiDocentService } from "./ai-docent/ai-docent.service";
     RewardsController,
     MissionsController,
     AiDocentController,
+    ExternalSearchController,
   ],
   providers: [
     PrismaService,
@@ -40,6 +43,7 @@ import { AiDocentService } from "./ai-docent/ai-docent.service";
     RewardsService,
     MissionsService,
     AiDocentService,
+    ExternalSearchService,
   ],
 })
 export class AppModule {}

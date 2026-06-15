@@ -648,6 +648,100 @@ main {
   background: #fbfcfa;
 }
 
+.external-search-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #f7f8f4;
+}
+
+.external-search-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.external-search-header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.external-search-header strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.external-search-header > span {
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.external-search-list {
+  display: grid;
+  gap: 8px;
+}
+
+.external-search-item {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid #dfe5dc;
+  border-radius: 8px;
+  background: white;
+  color: inherit;
+}
+
+.external-search-item:hover {
+  border-color: #c8d8cf;
+  background: #fbfdf9;
+}
+
+.external-search-item > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.external-search-item strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.external-search-item span {
+  flex: 0 0 auto;
+  color: var(--sage);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.external-search-item p,
+.external-search-state {
+  margin: 0;
+  color: #57524e;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.external-search-state {
+  padding: 12px;
+  border: 1px dashed #d6ded3;
+  border-radius: 8px;
+  background: white;
+}
+
 .board-list {
   display: grid;
 }
@@ -836,6 +930,26 @@ main {
   color: var(--muted);
   font-size: 12px;
   font-style: normal;
+}
+
+.docent-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.docent-sources span {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fffdfb;
+  color: var(--muted);
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .docent-input {
@@ -1523,6 +1637,16 @@ main {
 
   .board-row {
     grid-template-columns: 1fr;
+  }
+
+  .external-search-header,
+  .external-search-item > div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .external-search-header > span {
+    max-width: 100%;
   }
 
   .docent-message {

@@ -1,7 +1,19 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { CSSProperties, ChangeEvent, ReactNode } from "react";
-import type { Artwork, DailyMissions, MissionAnalysis, Museum, Post, PostComment, PostDetail, Session, UserState } from "./types";
+import type {
+  AiDocentSource,
+  Artwork,
+  DailyMissions,
+  ExternalSearchResponse,
+  MissionAnalysis,
+  Museum,
+  Post,
+  PostComment,
+  PostDetail,
+  Session,
+  UserState,
+} from "./types";
 
 const emptyState: UserState = {
   points: 0,
@@ -44,6 +56,7 @@ type DocentChatMessage = {
   role: "user" | "assistant";
   text: string;
   suggestedArtworks?: Artwork[];
+  sources?: AiDocentSource[];
 };
 
 const docentQuickPrompts = [
@@ -864,10 +877,97 @@ function CollectionPage({ artworks, session, openImage }: { artworks: Artwork[];
   );
 }
 
+function ExternalSearchPanel({
+  query,
+  response,
+  isLoading,
+  error,
+}: {
+  query: string;
+  response: ExternalSearchResponse | null;
+  isLoading: boolean;
+  error: string;
+}) {
+  const results = response?.results ?? [];
+
+  return (
+    <section className="external-search-panel" aria-live="polite">
+      <div className="external-search-header">
+        <div>
+          <span className="eyebrow">MCP SEARCH</span>
+          <strong>외부 검색 결과</strong>
+        </div>
+        <span>{query}</span>
+      </div>
+
+      {isLoading ? <div className="external-search-state">외부 검색 중입니다.</div> : null}
+      {!isLoading && error ? <div className="external-search-state">외부 검색 결과를 불러오지 못했습니다.</div> : null}
+      {!isLoading && response?.configured === false ? (
+        <div className="external-search-state">MCP 검색 서버 설정이 필요합니다.</div>
+      ) : null}
+      {!isLoading && response?.configured !== false && !error && response && !results.length ? (
+        <div className="external-search-state">외부 검색 결과가 없습니다.</div>
+      ) : null}
+      {results.length ? (
+        <div className="external-search-list">
+          {results.map((result) => (
+            <a className="external-search-item" href={result.url} target="_blank" rel="noreferrer" key={result.url}>
+              <div>
+                <strong>{result.title}</strong>
+                <span>{result.source}</span>
+              </div>
+              {result.snippet ? <p>{result.snippet}</p> : null}
+            </a>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] }) {
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState({ scope: "전체", country: "전체", area: "전체", museumId: "전체" });
   const [boardFilter, setBoardFilter] = useState<BoardFilter>("all");
+  const [externalSearch, setExternalSearch] = useState<ExternalSearchResponse | null>(null);
+  const [externalSearchError, setExternalSearchError] = useState("");
+  const [isExternalSearching, setIsExternalSearching] = useState(false);
+  const normalizedQuery = query.trim();
+
+  useEffect(() => {
+    if (normalizedQuery.length < 2) {
+      setExternalSearch(null);
+      setExternalSearchError("");
+      setIsExternalSearching(false);
+      return;
+    }
+
+    let canceled = false;
+    setIsExternalSearching(true);
+    setExternalSearchError("");
+
+    const timer = window.setTimeout(() => {
+      api
+        .externalSearch(normalizedQuery)
+        .then((response) => {
+          if (!canceled) setExternalSearch(response);
+        })
+        .catch((error) => {
+          if (!canceled) {
+            setExternalSearch(null);
+            setExternalSearchError(error instanceof Error ? error.message : "external_search_failed");
+          }
+        })
+        .finally(() => {
+          if (!canceled) setIsExternalSearching(false);
+        });
+    }, 500);
+
+    return () => {
+      canceled = true;
+      window.clearTimeout(timer);
+    };
+  }, [normalizedQuery]);
 
   const filteredPosts = posts.filter((post) => {
     const text = `${post.title} ${post.body} ${post.museumName ?? ""}`.toLowerCase();
@@ -880,7 +980,7 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
     const boardMatch =
       boardFilter === "all" ||
       (boardFilter === "popular" ? post.upVotes >= 10 : (post.boardType ?? "free") === boardFilter);
-    return boardMatch && museumMatch && (!query || text.includes(query.toLowerCase()));
+    return boardMatch && museumMatch && (!normalizedQuery || text.includes(normalizedQuery.toLowerCase()));
   });
 
   return (
@@ -907,6 +1007,14 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="게시글 검색" />
           <MuseumLocationPicker museums={museums} value={search} onChange={setSearch} allowAll />
         </div>
+        {normalizedQuery.length >= 2 ? (
+          <ExternalSearchPanel
+            query={normalizedQuery}
+            response={externalSearch}
+            isLoading={isExternalSearching}
+            error={externalSearchError}
+          />
+        ) : null}
 
         <div className="board-list">
           {filteredPosts.length ? (
@@ -993,6 +1101,7 @@ function AiDocentPage({
           role: "assistant",
           text: response.answer,
           suggestedArtworks: response.suggestedArtworks,
+          sources: response.sources,
         },
       ]);
     } catch (error) {
@@ -1047,6 +1156,15 @@ function AiDocentPage({
                         <em>{art.artist}</em>
                       </span>
                     </button>
+                  ))}
+                </div>
+              )}
+              {message.sources && message.sources.length > 0 && (
+                <div className="docent-sources" aria-label="답변 근거">
+                  {message.sources.map((source, index) => (
+                    <span key={`${source.type}-${source.artworkId ?? source.title}-${index}`} title={source.detail ?? source.sourceType ?? source.type}>
+                      {docentSourceLabel(source.type)} · {source.title}
+                    </span>
                   ))}
                 </div>
               )}
@@ -1740,6 +1858,13 @@ function aiDocentErrorMessage(message: string) {
     return "로그인 후 AI 도슨트에게 질문할 수 있어요.";
   }
   return `AI 도슨트가 답변하지 못했습니다. ${message}`;
+}
+
+function docentSourceLabel(type: AiDocentSource["type"]) {
+  if (type === "daily_mission") return "오늘 미션";
+  if (type === "user_collection") return "내 컬렉션";
+  if (type === "museum") return "출처";
+  return "작품 지식";
 }
 
 async function imageFileToMissionDataUrl(file: File) {

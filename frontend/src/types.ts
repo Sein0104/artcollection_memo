@@ -85,4 +85,28 @@ export type MissionAnalysis = {
 export type AiDocentResponse = {
   answer: string;
   suggestedArtworks: Artwork[];
+  sources: AiDocentSource[];
+};
+
+export type AiDocentSource = {
+  type: "daily_mission" | "artwork_knowledge" | "user_collection" | "museum";
+  title: string;
+  artworkId?: string;
+  sourceType?: string;
+  detail?: string;
+};
+
+export type ExternalSearchResult = {
+  title: string;
+  snippet: string;
+  url: string;
+  source: string;
+};
+
+export type ExternalSearchResponse = {
+  query: string;
+  provider: "mcp";
+  configured: boolean;
+  results: ExternalSearchResult[];
+  message?: string;
 };

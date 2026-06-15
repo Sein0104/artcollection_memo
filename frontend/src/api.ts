@@ -1,4 +1,15 @@
-import type { AiDocentResponse, Artwork, DailyMissions, MissionAnalysis, Museum, Post, PostDetail, Session, UserState } from "./types";
+import type {
+  AiDocentResponse,
+  Artwork,
+  DailyMissions,
+  ExternalSearchResponse,
+  MissionAnalysis,
+  Museum,
+  Post,
+  PostDetail,
+  Session,
+  UserState,
+} from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -85,4 +96,5 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message }),
     }),
+  externalSearch: (query: string) => request<ExternalSearchResponse>(`/external-search?q=${encodeURIComponent(query)}`),
 };
