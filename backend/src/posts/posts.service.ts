@@ -1,10 +1,12 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import { PrismaService } from "../prisma.service";
 import { AuthService } from "../auth/auth.service";
 import { AutoModService } from "../auto-mod/auto-mod.service";
 import { CreateCommentDto, CreatePostDto, UpdatePostDto, VotePostDto } from "./dto";
 
 const GENERAL_POST_MUSEUM_ID = "general-post";
+const DELETED_COMMENT_BODY = "삭제된 댓글입니다.";
 const TITLE_STEPS = [
   [4000, "마스터 큐레이터"],
   [3000, "컬렉션 디렉터"],
@@ -65,6 +67,16 @@ export class PostsService {
       title,
       body,
     });
+    if (this.autoMod.isBlockingAction(moderation.action)) {
+      await this.autoMod.recordCase({
+        targetType: "post",
+        targetId: `preflight-${randomUUID()}`,
+        authorId: user.id,
+        decision: moderation,
+        status: "resolved",
+      });
+      return { ...(await this.list()), moderation: this.autoMod.noticeFor(moderation) };
+    }
 
     const post = await this.prisma.post.create({
       data: {
@@ -108,7 +120,19 @@ export class PostsService {
       body,
       postId,
       parentId: dto.parentId,
+      useLlm: false,
     });
+    if (this.autoMod.isBlockingAction(moderation.action)) {
+      await this.autoMod.recordCase({
+        targetType: "comment",
+        targetId: `preflight-${randomUUID()}`,
+        postId,
+        authorId: user.id,
+        decision: moderation,
+        status: "resolved",
+      });
+      return { ...(await this.detail(postId, cookieHeader)), moderation: this.autoMod.noticeFor(moderation) };
+    }
 
     const comment = await this.prisma.postComment.create({
       data: {
@@ -130,6 +154,23 @@ export class PostsService {
     });
 
     return { ...(await this.detail(postId, cookieHeader)), moderation: this.autoMod.noticeFor(moderation) };
+  }
+
+  async removeComment(postId: string, commentId: string, cookieHeader?: string) {
+    const user = await this.auth.requireUserFromCookie(cookieHeader);
+
+    const comment = await this.prisma.postComment.findUnique({ where: { id: commentId } });
+    if (!comment || comment.postId !== postId || comment.status !== "published") throw new NotFoundException("comment_not_found");
+    if (comment.authorId !== user.id) throw new ForbiddenException("not_comment_author");
+
+    if (comment.body !== DELETED_COMMENT_BODY) {
+      await this.prisma.postComment.update({
+        where: { id: commentId },
+        data: { body: DELETED_COMMENT_BODY },
+      });
+    }
+
+    return this.detail(postId, cookieHeader);
   }
 
   async vote(postId: string, dto: VotePostDto, cookieHeader?: string) {
@@ -183,6 +224,17 @@ export class PostsService {
       body,
       postId,
     });
+    if (this.autoMod.isBlockingAction(moderation.action)) {
+      await this.autoMod.recordCase({
+        targetType: "post",
+        targetId: postId,
+        postId,
+        authorId: user.id,
+        decision: moderation,
+        status: "resolved",
+      });
+      return { ...(await this.detail(postId, cookieHeader)), moderation: this.autoMod.noticeFor(moderation) };
+    }
 
     await this.prisma.post.update({
       where: { id: postId },

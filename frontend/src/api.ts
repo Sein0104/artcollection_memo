@@ -4,7 +4,6 @@ import type {
   DailyMissions,
   ExternalSearchResponse,
   MissionAnalysis,
-  ModerationCase,
   ModerationNotice,
   Museum,
   Post,
@@ -79,6 +78,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  deleteComment: (postId: string, commentId: string) =>
+    request<{ post: PostDetail }>(`/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`, {
+      method: "DELETE",
+    }),
   votePost: (postId: string, body: { type: "up" | "down" }) =>
     request<{ post: PostDetail }>(`/posts/${encodeURIComponent(postId)}/vote`, {
       method: "POST",
@@ -99,10 +102,4 @@ export const api = {
       body: JSON.stringify({ message }),
     }),
   externalSearch: (query: string) => request<ExternalSearchResponse>(`/external-search?q=${encodeURIComponent(query)}`),
-  moderationCases: (status = "open") => request<{ cases: ModerationCase[] }>(`/moderation/cases?status=${encodeURIComponent(status)}`),
-  reviewModerationCase: (id: string, body: { decision: "approve" | "reject" | "resolve"; reviewerNote?: string }) =>
-    request<{ cases: ModerationCase[] }>(`/moderation/cases/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      body: JSON.stringify(body),
-    }),
 };

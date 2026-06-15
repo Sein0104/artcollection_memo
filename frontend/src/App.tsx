@@ -7,7 +7,6 @@ import type {
   DailyMissions,
   ExternalSearchResponse,
   MissionAnalysis,
-  ModerationCase,
   ModerationNotice,
   Museum,
   Post,
@@ -31,8 +30,7 @@ const tabs = [
   { id: "artworks", label: "작품 소개" },
   { id: "collection", label: "내 컬렉션" },
   { id: "community", label: "게시판" },
-  { id: "docent", label: "AI 도슨트" },
-  { id: "moderation", label: "운영검토" },
+  { id: "docent", label: "AI 도우미" },
 ];
 
 const titleSteps = [
@@ -49,6 +47,8 @@ const titleSteps = [
 
 const artworkFilters = ["전체", "서양", "동양", "한국화", "조각", "설치예술", "공예", "미디어아트", "현대", "인상주의", "추상", "초상", "풍경", "수묵"];
 const collectionProgressFilters = artworkFilters.filter((filter) => filter !== "전체");
+const boardHiddenMuseumIds = new Set(["national-museum"]);
+const deletedCommentBody = "삭제된 댓글입니다.";
 
 type SortMode = "name" | "year";
 type BoardType = "free" | "review";
@@ -64,9 +64,9 @@ type DocentChatMessage = {
 
 const docentQuickPrompts = [
   "노을이나 하늘 느낌으로 따라 찍기 좋은 작품 추천해줘",
-  "초보자가 미션하기 쉬운 작품을 알려줘",
+  "오늘의 미션 작품 힌트를 알려줘",
   "강한 색감이 인상적인 작품을 찾아줘",
-  "조용한 분위기의 작품을 설명해줘",
+  "인상주의 작품에는 뭐가 있어?",
 ];
 
 const artworkTextTranslations: Record<string, string> = {
@@ -189,15 +189,27 @@ function moderationNoticeMessage(notice?: ModerationNotice) {
   if (!notice) return "";
   if (notice.action === "warn") return notice.authorMessage || "표현을 조금 부드럽게 다듬어 주세요.";
   if (notice.action === "hold" || notice.action === "report") {
-    return notice.authorMessage || "게시물이 운영자 검토 대기로 전환되었습니다.";
+    return notice.authorMessage || "비하, 모욕, 위협, 개인정보 노출 위험이 감지되어 업로드되지 않았어요. 표현을 수정한 뒤 다시 시도해주세요.";
   }
   return "";
+}
+
+function isModerationBlocked(notice?: ModerationNotice) {
+  return notice?.action === "hold" || notice?.action === "report";
 }
 
 function routeFromHash() {
   const value = window.location.hash.replace("#", "");
   if (value.startsWith("post/")) return value;
-  return ["scan", "artworks", "collection", "community", "docent", "moderation", "write", "login"].includes(value) ? value : "scan";
+  return ["scan", "artworks", "collection", "community", "docent", "write", "login"].includes(value) ? value : "scan";
+}
+
+function boardMuseums(museums: Museum[]) {
+  return museums.filter((museum) => !boardHiddenMuseumIds.has(museum.id));
+}
+
+function boardMuseumName(post: Post | PostDetail) {
+  return boardHiddenMuseumIds.has(post.museumId) ? "" : post.museumName ?? "";
 }
 
 export function App() {
@@ -380,7 +392,6 @@ export function App() {
         {route === "collection" && <CollectionPage artworks={artworks} session={session} openImage={setSelectedImage} />}
         {route === "community" && <CommunityPage museums={museums} posts={posts} />}
         {route === "docent" && <AiDocentPage session={session} openImage={setSelectedImage} showToast={showToast} />}
-        {route === "moderation" && <ModerationPage session={session} setPosts={setPosts} showToast={showToast} />}
         {route === "write" && <PostWritePage museums={museums} session={session} setPosts={setPosts} showToast={showToast} />}
         {postId && <PostDetailPage postId={postId} session={session} setPosts={setPosts} showToast={showToast} />}
         {route === "login" && <AuthPage />}
@@ -815,6 +826,7 @@ function MissionChallengeModal({
 }
 
 function CollectionPage({ artworks, session, openImage }: { artworks: Artwork[]; session: Session; openImage: (art: Artwork) => void }) {
+  const [filter, setFilter] = useState("전체");
   const entries = [
     ...session.state.collection.map((entry) => ({ ...entry, source: "일반" })),
     ...session.state.missionCollection.map((entry) => ({ ...entry, source: "미션" })),
@@ -837,6 +849,12 @@ function CollectionPage({ artworks, session, openImage }: { artworks: Artwork[];
     count: session.state.purchases.length,
   };
   const allProgress = [...progress.filter((item) => item.target > 0), pointShopProgress].filter((item) => item.target > 0);
+  const visibleEntries = entries.filter((entry) => {
+    const art = artworks.find((item) => item.id === entry.artworkId);
+    if (filter === "전체") return true;
+    if (filter === "포인트샵 수집") return entry.source === "보상";
+    return art ? isArtworkMatch(art, filter) : false;
+  });
 
   return (
     <section className="app-page is-active">
@@ -848,7 +866,12 @@ function CollectionPage({ artworks, session, openImage }: { artworks: Artwork[];
         {allProgress.map((item) => {
           const achieved = Math.min(item.count, item.target);
           return (
-            <div key={item.filter} className="collection-progress-item">
+            <button
+              key={item.filter}
+              type="button"
+              className={`collection-progress-item ${filter === item.filter ? "is-active" : ""}`}
+              onClick={() => setFilter((current) => (current === item.filter ? "전체" : item.filter))}
+            >
               <div>
                 <strong>{item.filter}</strong>
                 <span>
@@ -856,18 +879,29 @@ function CollectionPage({ artworks, session, openImage }: { artworks: Artwork[];
                 </span>
               </div>
               <progress value={achieved} max={item.target} />
-            </div>
+            </button>
           );
         })}
       </div>
       {entries.length ? (
+        <div className="collection-filter-summary">
+          <button type="button" className={filter === "전체" ? "is-active" : ""} onClick={() => setFilter("전체")}>
+            전체 보기
+          </button>
+          <span>
+            {filter === "전체" ? "수집한 전체 작품" : `${filter} 분류`} {visibleEntries.length}점
+          </span>
+        </div>
+      ) : null}
+      {entries.length ? (
         <>
           <div className="collection-grid">
-            {entries.map((entry) => {
+            {visibleEntries.map((entry) => {
               const art = artworks.find((item) => item.id === entry.artworkId);
               return art ? <ArtCard key={`${entry.source}-${entry.artworkId}`} art={art} openImage={openImage} /> : null;
             })}
           </div>
+          {!visibleEntries.length && <div className="board-empty">이 분류로 수집한 작품이 아직 없습니다.</div>}
         </>
       ) : (
         <div className="collection-empty">
@@ -946,6 +980,7 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
   const [externalSearchError, setExternalSearchError] = useState("");
   const [isExternalSearching, setIsExternalSearching] = useState(false);
   const normalizedQuery = query.trim();
+  const visibleMuseums = boardMuseums(museums);
 
   useEffect(() => {
     if (normalizedQuery.length < 2) {
@@ -974,7 +1009,7 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
         .finally(() => {
           if (!canceled) setIsExternalSearching(false);
         });
-    }, 500);
+    }, 350);
 
     return () => {
       canceled = true;
@@ -983,8 +1018,8 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
   }, [normalizedQuery]);
 
   const filteredPosts = posts.filter((post) => {
-    const text = `${post.title} ${post.body} ${post.museumName ?? ""}`.toLowerCase();
-    const museum = museums.find((item) => item.id === post.museumId);
+    const text = `${post.title} ${post.body} ${boardMuseumName(post)}`.toLowerCase();
+    const museum = visibleMuseums.find((item) => item.id === post.museumId);
     const museumMatch =
       (search.scope === "전체" || museum?.scope === search.scope) &&
       (search.country === "전체" || museum?.country === search.country) &&
@@ -1018,17 +1053,8 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
         </div>
         <div className="board-toolbar">
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="게시글 검색" />
-          <MuseumLocationPicker museums={museums} value={search} onChange={setSearch} allowAll />
+          <MuseumLocationPicker museums={visibleMuseums} value={search} onChange={setSearch} allowAll />
         </div>
-        {normalizedQuery.length >= 2 ? (
-          <ExternalSearchPanel
-            query={normalizedQuery}
-            response={externalSearch}
-            isLoading={isExternalSearching}
-            error={externalSearchError}
-          />
-        ) : null}
-
         <div className="board-list">
           {filteredPosts.length ? (
             filteredPosts.map((post) => (
@@ -1037,7 +1063,7 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
                   <div className="board-row-title">
                     <strong>{post.title}</strong>
                     <span>{boardTypeLabels[(post.boardType ?? "free") as BoardType]}</span>
-                    <span>{post.museumName}</span>
+                    {boardMuseumName(post) && <span>{boardMuseumName(post)}</span>}
                   </div>
                   <p>{post.body}</p>
                   <div className="post-meta">
@@ -1056,6 +1082,14 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
             <div className="board-empty">조건에 맞는 게시글이 없습니다.</div>
           )}
         </div>
+        {normalizedQuery.length >= 2 ? (
+          <ExternalSearchPanel
+            query={normalizedQuery}
+            response={externalSearch}
+            isLoading={isExternalSearching}
+            error={externalSearchError}
+          />
+        ) : null}
       </section>
     </section>
   );
@@ -1092,7 +1126,7 @@ function AiDocentPage({
     if (!message || isAsking) return;
     if (!session.user) {
       window.location.hash = "#login";
-      showToast("로그인 후 AI 도슨트에게 질문할 수 있어요.");
+      showToast("로그인 후 AI 도우미에게 질문할 수 있어요.");
       return;
     }
 
@@ -1141,8 +1175,8 @@ function AiDocentPage({
     <section className="app-page is-active docent-page">
       <div className="page-title board-title">
         <div>
-          <span className="eyebrow">AI DOCENT</span>
-          <h1>AI 도슨트</h1>
+          <span className="eyebrow">AI HELPER</span>
+          <h1>AI 도우미</h1>
         </div>
       </div>
 
@@ -1172,15 +1206,6 @@ function AiDocentPage({
                   ))}
                 </div>
               )}
-              {message.sources && message.sources.length > 0 && (
-                <div className="docent-sources" aria-label="답변 근거">
-                  {message.sources.map((source, index) => (
-                    <span key={`${source.type}-${source.artworkId ?? source.title}-${index}`} title={source.detail ?? source.sourceType ?? source.type}>
-                      {docentSourceLabel(source.type)} · {source.title}
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
           ))}
           {isAsking && <div className="docent-loading">작품 지식을 찾는 중입니다.</div>}
@@ -1197,112 +1222,36 @@ function AiDocentPage({
   );
 }
 
-function ModerationPage({
-  session,
-  setPosts,
-  showToast,
-}: {
-  session: Session;
-  setPosts: (posts: Post[]) => void;
-  showToast: (message: string) => void;
-}) {
-  const [cases, setCases] = useState<ModerationCase[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (!session.user) return;
-    void loadCases();
-  }, [session.user?.id]);
-
-  async function loadCases() {
-    setIsLoading(true);
-    setError("");
-    try {
-      const result = await api.moderationCases("open");
-      setCases(result.cases);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "moderation_cases_failed");
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  async function reviewCase(id: string, decision: "approve" | "reject" | "resolve") {
-    try {
-      const result = await api.reviewModerationCase(id, { decision });
-      setCases(result.cases);
-      const refreshed = await api.posts();
-      setPosts(refreshed.posts);
-      showToast(decision === "approve" ? "게시물을 승인했습니다." : decision === "reject" ? "게시물을 반려했습니다." : "검토를 완료했습니다.");
-    } catch {
-      showToast("검토 결과를 저장하지 못했습니다.");
-    }
-  }
-
-  if (!session.user) {
-    return (
-      <section className="app-page is-active">
-        <div className="collection-empty">
-          <strong>로그인이 필요합니다.</strong>
-          <a className="primary-link" href="#login">
-            Google 로그인
-          </a>
-        </div>
-      </section>
-    );
-  }
-
+function ModerationPolicyGuide({ compact = false }: { compact?: boolean }) {
   return (
-    <section className="app-page is-active moderation-page">
-      <div className="page-title board-title">
-        <div>
-          <span className="eyebrow">AUTO-MOD</span>
-          <h1>운영 검토</h1>
-        </div>
-        <button className="ghost-button" onClick={() => void loadCases()} disabled={isLoading}>
-          새로고침
-        </button>
-      </div>
+    <div className={`moderation-policy-guide ${compact ? "is-compact" : ""}`}>
+      <strong>AI 게시글 검수 안내</strong>
+      <ul>
+        <li>비하, 모욕, 위협, 혐오 표현이나 개인정보 노출 위험이 있으면 등록되지 않습니다.</li>
+        <li>표현이 막히면 창은 그대로 유지되며, 문장을 수정한 뒤 다시 등록할 수 있습니다.</li>
+        <li>작품과 감상에 대한 의견은 괜찮지만, 사람을 향한 공격 표현은 피해주세요.</li>
+      </ul>
+    </div>
+  );
+}
 
-      <section className="moderation-shell">
-        {isLoading && <div className="board-empty">검토 목록을 불러오는 중입니다.</div>}
-        {error && <div className="board-empty">검토 목록을 불러오지 못했습니다. {error}</div>}
-        {!isLoading && !error && !cases.length && <div className="board-empty">검토 대기 중인 게시물이 없습니다.</div>}
-        {cases.map((item) => (
-          <article className="moderation-case" key={item.id}>
-            <div className="moderation-case-main">
-              <div className="moderation-case-top">
-                <span className={`moderation-risk is-${item.action}`}>{item.action}</span>
-                <span>위험도 {item.severity}/5</span>
-                <span>{Math.round(item.confidence * 100)}%</span>
-                <span>{new Date(item.createdAt).toLocaleString("ko-KR")}</span>
-              </div>
-              <h2>{item.content.title || (item.targetType === "comment" ? "댓글 검토" : "게시글 검토")}</h2>
-              <p>{item.content.body}</p>
-              <div className="post-meta">
-                <span>{item.author}</span>
-                <span>{item.targetType}</span>
-                {item.content.museumName && <span>{item.content.museumName}</span>}
-              </div>
-              <div className="moderation-reason">
-                <strong>{item.adminSummary || item.reason}</strong>
-                <span>{item.categories.join(", ")}</span>
-              </div>
-            </div>
-            <div className="moderation-actions">
-              <button onClick={() => void reviewCase(item.id, "approve")}>승인</button>
-              <button className="ghost-button" onClick={() => void reviewCase(item.id, "resolve")}>
-                해결
-              </button>
-              <button className="ghost-button is-danger" onClick={() => void reviewCase(item.id, "reject")}>
-                반려
-              </button>
-            </div>
-          </article>
-        ))}
+function ModerationPolicyModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="title-modal is-visible">
+      <button className="title-modal-backdrop" type="button" onClick={onClose} aria-label="AI 댓글 검수 안내 닫기" />
+      <section className="title-modal-panel">
+        <div className="mission-modal-header">
+          <div>
+            <span className="eyebrow">AI CHECK</span>
+            <h2>댓글 검수 안내</h2>
+          </div>
+          <button className="ghost-button" type="button" onClick={onClose}>
+            닫기
+          </button>
+        </div>
+        <ModerationPolicyGuide compact />
       </section>
-    </section>
+    </div>
   );
 }
 
@@ -1320,12 +1269,14 @@ function PostWritePage({
   const [draft, setDraft] = useState({ scope: "", country: "", area: "", museumId: "" });
   const [boardType, setBoardType] = useState<BoardType>("free");
   const [withoutMuseum, setWithoutMuseum] = useState(false);
+  const [isPolicyHelpOpen, setIsPolicyHelpOpen] = useState(false);
+  const visibleMuseums = boardMuseums(museums);
 
   useEffect(() => {
-    if (withoutMuseum || !museums.length || draft.museumId) return;
-    const first = museums[0];
+    if (withoutMuseum || !visibleMuseums.length || draft.museumId) return;
+    const first = visibleMuseums[0];
     setDraft({ scope: first.scope, country: first.country, area: first.area, museumId: first.id });
-  }, [museums, draft.museumId, withoutMuseum]);
+  }, [visibleMuseums, draft.museumId, withoutMuseum]);
 
   async function createPost(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1346,6 +1297,10 @@ function PostWritePage({
       boardType,
     });
     setPosts(result.posts);
+    if (isModerationBlocked(result.moderation)) {
+      showToast(moderationNoticeMessage(result.moderation));
+      return;
+    }
     window.location.hash = "#community";
     showToast(moderationNoticeMessage(result.moderation) || "게시글을 등록했습니다.");
   }
@@ -1356,10 +1311,22 @@ function PostWritePage({
         게시판으로
       </a>
       <form className="post-form write-form" onSubmit={createPost}>
-        <div className="page-title">
-          <span className="eyebrow">WRITE</span>
-          <h1>글쓰기</h1>
+        <div className="page-title board-title">
+          <div>
+            <span className="eyebrow">WRITE</span>
+            <h1>글쓰기</h1>
+          </div>
+          <button
+            type="button"
+            className="policy-help-button"
+            aria-label="AI 게시글 검수 안내"
+            aria-expanded={isPolicyHelpOpen}
+            onClick={() => setIsPolicyHelpOpen((current) => !current)}
+          >
+            ?
+          </button>
         </div>
+        {isPolicyHelpOpen && <ModerationPolicyGuide />}
         <div className="write-board-tabs">
           <button type="button" className={boardType === "free" ? "is-active" : ""} onClick={() => setBoardType("free")}>
             자유게시판
@@ -1380,7 +1347,7 @@ function PostWritePage({
           />
           미술관 태그 없이 작성
         </label>
-        {!withoutMuseum && <MuseumLocationPicker museums={museums} value={draft} onChange={setDraft} />}
+        {!withoutMuseum && <MuseumLocationPicker museums={visibleMuseums} value={draft} onChange={setDraft} />}
         <button type="submit">등록</button>
       </form>
     </section>
@@ -1403,6 +1370,8 @@ function PostDetailPage({
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editBody, setEditBody] = useState("");
+  const [isEditPolicyHelpOpen, setIsEditPolicyHelpOpen] = useState(false);
+  const [isCommentPolicyOpen, setIsCommentPolicyOpen] = useState(false);
 
   useEffect(() => {
     setPost(null);
@@ -1431,17 +1400,18 @@ function PostDetailPage({
     if (!session.user) {
       window.location.hash = "#login";
       showToast("로그인 후 댓글을 달 수 있어요.");
-      return;
+      return false;
     }
     const form = new FormData(event.currentTarget);
     const body = String(form.get("body")).trim();
-    if (!body) return;
+    if (!body) return false;
     const result = await api.createComment(postId, { body, parentId });
     setPost(result.post);
-    setReplyTo(null);
     const moderationMessage = moderationNoticeMessage(result.moderation);
     if (moderationMessage) showToast(moderationMessage);
-    event.currentTarget.reset();
+    if (isModerationBlocked(result.moderation)) return false;
+    setReplyTo(null);
+    return true;
   }
 
   async function deletePost() {
@@ -1456,6 +1426,18 @@ function PostDetailPage({
       showToast("게시글을 삭제했습니다.");
     } catch {
       showToast("게시글을 삭제하지 못했습니다.");
+    }
+  }
+
+  async function deleteComment(commentId: string) {
+    if (!session.user || !post) return;
+
+    try {
+      const result = await api.deleteComment(post.id, commentId);
+      setPost(result.post);
+      showToast("댓글을 삭제했습니다.");
+    } catch {
+      showToast("댓글을 삭제하지 못했습니다.");
     }
   }
 
@@ -1480,6 +1462,10 @@ function PostDetailPage({
     try {
       const result = await api.updatePost(post.id, { title, body });
       setPost(result.post);
+      if (isModerationBlocked(result.moderation)) {
+        showToast(moderationNoticeMessage(result.moderation));
+        return;
+      }
       setIsEditing(false);
       const refreshed = await api.posts();
       setPosts(refreshed.posts);
@@ -1512,7 +1498,7 @@ function PostDetailPage({
               {post.authorTitle && <em>{post.authorTitle}</em>}
             </span>
             <span>{new Date(post.createdAt).toLocaleString("ko-KR")}</span>
-            <span>{post.museumName}</span>
+            {boardMuseumName(post) && <span>{boardMuseumName(post)}</span>}
           </div>
           {session.user?.nickname === post.author && (
             <details className="post-action-menu">
@@ -1530,6 +1516,19 @@ function PostDetailPage({
         </div>
         {isEditing ? (
           <form className="post-edit-form" onSubmit={updatePost}>
+            <div className="form-assist-row">
+              <span className="eyebrow">AI CHECK</span>
+              <button
+                type="button"
+                className="policy-help-button"
+                aria-label="AI 게시글 검수 안내"
+                aria-expanded={isEditPolicyHelpOpen}
+                onClick={() => setIsEditPolicyHelpOpen((current) => !current)}
+              >
+                ?
+              </button>
+            </div>
+            {isEditPolicyHelpOpen && <ModerationPolicyGuide compact />}
             <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} maxLength={36} required />
             <textarea value={editBody} onChange={(event) => setEditBody(event.target.value)} maxLength={240} rows={6} required />
             <div className="post-edit-actions">
@@ -1555,8 +1554,19 @@ function PostDetailPage({
 
       <section className="comments-section">
         <div className="section-heading">
-          <span className="eyebrow">COMMENTS</span>
-          <h2>댓글 {post.commentCount}</h2>
+          <div>
+            <span className="eyebrow">COMMENTS</span>
+            <h2>댓글 {post.commentCount}</h2>
+          </div>
+          <button
+            type="button"
+            className="policy-help-button"
+            aria-label="AI 댓글 검수 안내"
+            aria-expanded={isCommentPolicyOpen}
+            onClick={() => setIsCommentPolicyOpen(true)}
+          >
+            ?
+          </button>
         </div>
         <CommentForm onSubmit={(event) => submitComment(event)} placeholder="댓글을 남겨보세요" />
         <div className="comment-list">
@@ -1564,28 +1574,38 @@ function PostDetailPage({
             <CommentItem
               key={comment.id}
               comment={comment}
+              session={session}
               replyTo={replyTo}
               setReplyTo={setReplyTo}
               submitComment={submitComment}
+              deleteComment={deleteComment}
             />
           ))}
         </div>
       </section>
+      {isCommentPolicyOpen && <ModerationPolicyModal onClose={() => setIsCommentPolicyOpen(false)} />}
     </section>
   );
 }
 
 function CommentItem({
   comment,
+  session,
   replyTo,
   setReplyTo,
   submitComment,
+  deleteComment,
 }: {
   comment: PostComment;
+  session: Session;
   replyTo: string | null;
   setReplyTo: (id: string | null) => void;
-  submitComment: (event: FormEvent<HTMLFormElement>, parentId?: string) => void;
+  submitComment: (event: FormEvent<HTMLFormElement>, parentId?: string) => boolean | void | Promise<boolean | void>;
+  deleteComment: (commentId: string) => Promise<void>;
 }) {
+  const isDeleted = comment.body === deletedCommentBody;
+  const canDelete = !isDeleted && session.user?.nickname === comment.author;
+
   return (
     <div className="comment-item">
       <div className="comment-body">
@@ -1597,15 +1617,32 @@ function CommentItem({
           <span>{new Date(comment.createdAt).toLocaleString("ko-KR")}</span>
         </div>
         <p>{comment.body}</p>
-        <button className="ghost-button" onClick={() => setReplyTo(replyTo === comment.id ? null : comment.id)}>
-          답글
-        </button>
+        <div className="comment-actions">
+          {!isDeleted && (
+            <button className="ghost-button" onClick={() => setReplyTo(replyTo === comment.id ? null : comment.id)}>
+              답글
+            </button>
+          )}
+          {canDelete && (
+            <button className="ghost-button is-danger" onClick={() => void deleteComment(comment.id)}>
+              삭제
+            </button>
+          )}
+        </div>
       </div>
       {replyTo === comment.id && <CommentForm onSubmit={(event) => submitComment(event, comment.id)} placeholder="답글을 남겨보세요" />}
       {comment.replies.length > 0 && (
         <div className="reply-list">
           {comment.replies.map((reply) => (
-            <CommentItem key={reply.id} comment={reply} replyTo={replyTo} setReplyTo={setReplyTo} submitComment={submitComment} />
+            <CommentItem
+              key={reply.id}
+              comment={reply}
+              session={session}
+              replyTo={replyTo}
+              setReplyTo={setReplyTo}
+              submitComment={submitComment}
+              deleteComment={deleteComment}
+            />
           ))}
         </div>
       )}
@@ -1613,12 +1650,12 @@ function CommentItem({
   );
 }
 
-function CommentForm({ onSubmit, placeholder }: { onSubmit: (event: FormEvent<HTMLFormElement>) => void | Promise<void>; placeholder: string }) {
+function CommentForm({ onSubmit, placeholder }: { onSubmit: (event: FormEvent<HTMLFormElement>) => boolean | void | Promise<boolean | void>; placeholder: string }) {
   const [body, setBody] = useState("");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
-    await onSubmit(event);
-    setBody("");
+    const shouldReset = await onSubmit(event);
+    if (shouldReset !== false) setBody("");
   }
 
   return (
@@ -1974,15 +2011,15 @@ function missionAnalysisErrorMessage(message: string) {
 
 function aiDocentErrorMessage(message: string) {
   if (message === "openai_api_key_required") {
-    return "AI 도슨트를 쓰려면 백엔드 .env에 OPENAI_API_KEY를 먼저 설정해주세요.";
+    return "AI 도우미를 쓰려면 백엔드 .env에 OPENAI_API_KEY를 먼저 설정해주세요.";
   }
   if (message === "openai_timeout") {
-    return "AI 도슨트 답변 시간이 너무 오래 걸렸어요. 잠시 후 다시 시도해주세요.";
+    return "AI 도우미 답변 시간이 너무 오래 걸렸어요. 잠시 후 다시 시도해주세요.";
   }
   if (message === "login_required") {
-    return "로그인 후 AI 도슨트에게 질문할 수 있어요.";
+    return "로그인 후 AI 도우미에게 질문할 수 있어요.";
   }
-  return `AI 도슨트가 답변하지 못했습니다. ${message}`;
+  return `AI 도우미가 답변하지 못했습니다. ${message}`;
 }
 
 function docentSourceLabel(type: AiDocentSource["type"]) {

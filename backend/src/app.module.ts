@@ -19,7 +19,6 @@ import { AiDocentController } from "./ai-docent/ai-docent.controller";
 import { AiDocentService } from "./ai-docent/ai-docent.service";
 import { ExternalSearchController } from "./external-search/external-search.controller";
 import { ExternalSearchService } from "./external-search/external-search.service";
-import { AutoModController } from "./auto-mod/auto-mod.controller";
 import { AutoModService } from "./auto-mod/auto-mod.service";
 
 @Module({
@@ -34,7 +33,6 @@ import { AutoModService } from "./auto-mod/auto-mod.service";
     MissionsController,
     AiDocentController,
     ExternalSearchController,
-    AutoModController,
   ],
   providers: [
     PrismaService,

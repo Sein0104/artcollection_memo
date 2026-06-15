@@ -13,6 +13,7 @@ const DOCENT_SUGGESTION_LIMIT = 3;
 const DOCENT_SOURCE_LIMIT = 8;
 const OPENAI_EMBEDDING_TIMEOUT_MS = 20_000;
 const OPENAI_DOCENT_TIMEOUT_MS = 45_000;
+const DOCENT_CACHE_TTL_MS = 5 * 60 * 1000;
 const KNOWLEDGE_SOURCE_TYPES = ["metadata", "mission_hint", "museum"] as const;
 
 const DOCENT_RESPONSE_JSON_SCHEMA = {
@@ -86,8 +87,17 @@ type DocentIntent = {
   museum: boolean;
 };
 
+type DocentChatResult = {
+  answer: string;
+  suggestedArtworks: ArtworkForKnowledge[];
+  sources: DocentSource[];
+};
+
 @Injectable()
 export class AiDocentService {
+  private knowledgeRefresh?: Promise<void>;
+  private readonly answerCache = new Map<string, { expiresAt: number; result: DocentChatResult }>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auth: AuthService,
@@ -99,13 +109,20 @@ export class AiDocentService {
     const user = await this.auth.requireUserFromCookie(cookieHeader);
     const message = dto.message.trim();
 
-    await this.ensureArtworkKnowledge();
+    await this.ensureArtworkKnowledgeOnce();
 
     const intent = this.detectIntent(message);
     const daily = await this.missions.daily();
     const dailyArtworks = daily.missions as ArtworkForKnowledge[];
     const collectionArtworks = intent.collection ? await this.userCollectionArtworks(user.id) : [];
-    const mentionedArtworks = await this.findMentionedArtworks(message);
+    const cacheKey = this.docentCacheKey(user.id, message, daily.dateKey, intent, collectionArtworks);
+    const cached = this.getCachedDocentAnswer(cacheKey);
+    if (cached) return cached;
+
+    const [mentionedArtworks, attributeMatchedArtworks] = await Promise.all([
+      this.findMentionedArtworks(message),
+      this.findAttributeMatchedArtworks(message),
+    ]);
     const queryEmbedding = (await this.createEmbeddings([message]))[0];
     const knowledgeScopeIds = intent.daily ? dailyArtworks.map((artwork) => artwork.id) : undefined;
     const candidates = await this.findKnowledgeCandidates(queryEmbedding, knowledgeScopeIds);
@@ -117,6 +134,7 @@ export class AiDocentService {
       dailyArtworks,
       collectionArtworks,
       mentionedArtworks,
+      attributeMatchedArtworks,
       candidates,
     });
     const allowedSuggestedArtworkIds = this.allowedSuggestedArtworkIds({
@@ -124,6 +142,7 @@ export class AiDocentService {
       dailyArtworks,
       collectionArtworks,
       mentionedArtworks,
+      attributeMatchedArtworks,
       candidates,
       contextItems,
     });
@@ -134,20 +153,33 @@ export class AiDocentService {
       intent,
       allowedSuggestedArtworkIds,
     });
-    const suggestedArtworkIds = this.normalizeSuggestedArtworkIds(response.suggestedArtworkIds, allowedSuggestedArtworkIds);
+    const suggestionLimit = mentionedArtworks.length ? Math.min(mentionedArtworks.length, DOCENT_SUGGESTION_LIMIT) : DOCENT_SUGGESTION_LIMIT;
+    const suggestedArtworkIds = this.normalizeSuggestedArtworkIds(response.suggestedArtworkIds, allowedSuggestedArtworkIds, suggestionLimit);
     const suggestedArtworks = await this.prisma.artwork.findMany({
       where: { id: { in: suggestedArtworkIds } },
     });
     const byId = new Map(suggestedArtworks.map((artwork) => [artwork.id, withLocalArtworkImage(artwork)]));
 
-    return {
-      answer: response.answer,
+    const result = {
+      answer: this.cleanAnswer(response.answer, contextItems.flatMap((item) => (item.artworkId ? [item.artworkId] : []))),
       suggestedArtworks: suggestedArtworkIds.flatMap((id) => {
         const artwork = byId.get(id);
         return artwork ? [artwork] : [];
       }),
       sources: this.sourcesForResponse(contextItems, suggestedArtworkIds, intent),
     };
+    this.setCachedDocentAnswer(cacheKey, result);
+    return result;
+  }
+
+  private ensureArtworkKnowledgeOnce() {
+    if (!this.knowledgeRefresh) {
+      this.knowledgeRefresh = this.ensureArtworkKnowledge().catch((error) => {
+        this.knowledgeRefresh = undefined;
+        throw error;
+      });
+    }
+    return this.knowledgeRefresh;
   }
 
   private async ensureArtworkKnowledge() {
@@ -264,6 +296,7 @@ export class AiDocentService {
     dailyArtworks,
     collectionArtworks,
     mentionedArtworks,
+    attributeMatchedArtworks,
     candidates,
   }: {
     message: string;
@@ -272,6 +305,7 @@ export class AiDocentService {
     dailyArtworks: ArtworkForKnowledge[];
     collectionArtworks: CollectionArtwork[];
     mentionedArtworks: ArtworkForKnowledge[];
+    attributeMatchedArtworks: ArtworkForKnowledge[];
     candidates: KnowledgeCandidate[];
   }) {
     const items: DocentContextItem[] = [];
@@ -328,6 +362,16 @@ export class AiDocentService {
           extraLines: [`소장/출처 맥락: ${this.museumSourceForArtwork(artwork)}`],
         }));
       }
+    }
+
+    for (const [index, artwork] of attributeMatchedArtworks.slice(0, DOCENT_DYNAMIC_CONTEXT_LIMIT).entries()) {
+      items.push(this.artworkContextItem({
+        key: `attribute-${index + 1}`,
+        sourceType: "artwork_knowledge",
+        artwork,
+        detail: "작품 소개 탭의 분류, 태그, 시대, 지역 데이터와 일치",
+        extraLines: [`홈페이지 작품 소개 기준으로 사용자 질문과 일치한 작품: ${message}`],
+      }));
     }
 
     for (const [index, candidate] of candidates.entries()) {
@@ -432,17 +476,19 @@ export class AiDocentService {
       })
       .join("\n\n");
     const prompt = [
-      "You are ArtCatch's AI docent.",
+      "You are ArtCatch's AI helper.",
       "Answer in Korean using only the provided ArtCatch service context.",
       "Do not invent artworks, missions, user collection items, museum facts, or availability outside the context.",
       "Recommendations must use only artwork ids from the allowed suggested artwork id list.",
+      "Never expose artwork ids, source keys, database ids, or internal identifiers such as starry-night, aic-28560, cma-123 in the answer.",
+      "When the user asks about a category, style, period, region, tag, or artwork group available in ArtCatch, list only artworks present in the provided context.",
       intent.daily
         ? "The user is asking about today's daily mission. Use only daily_mission context for today's mission answer and list the exact daily mission artworks from that context."
         : "",
       intent.collection
         ? "The user is asking about their collection. Use user_collection context first. If it is empty, say the collection is empty and do not pretend it has artworks."
         : "",
-      "If the context is insufficient, clearly say that the current ArtCatch data is limited.",
+      "If context is narrow, answer with the closest relevant provided context and keep the tone direct.",
       "Keep the answer concise: 3 to 6 sentences.",
       "Return strict JSON only.",
       "",
@@ -519,6 +565,37 @@ export class AiDocentService {
       .map((artwork) => withLocalArtworkImage(artwork) as ArtworkForKnowledge);
   }
 
+  private async findAttributeMatchedArtworks(message: string) {
+    const normalizedMessage = this.normalizeText(message);
+    if (normalizedMessage.length < 2) return [];
+
+    const artworks = await this.prisma.artwork.findMany({
+      where: {
+        id: { notIn: REMOVED_ARTWORK_IDS },
+        image: { not: null },
+      },
+      orderBy: { title: "asc" },
+    });
+
+    return artworks
+      .map((artwork) => {
+        const matchedValues = this.artworkAttributeValues(artwork as ArtworkForKnowledge).filter((value) => {
+          const normalized = this.normalizeText(value);
+          return normalized.length >= 2 && normalizedMessage.includes(normalized);
+        });
+        return matchedValues.length
+          ? {
+              artwork: withLocalArtworkImage(artwork) as ArtworkForKnowledge,
+              score: matchedValues.some((value) => artwork.category.includes(value)) ? 3 : matchedValues.length,
+            }
+          : null;
+      })
+      .filter((item): item is { artwork: ArtworkForKnowledge; score: number } => Boolean(item))
+      .sort((left, right) => right.score - left.score || left.artwork.title.localeCompare(right.artwork.title, "ko-KR"))
+      .slice(0, DOCENT_CONTEXT_LIMIT)
+      .map((item) => item.artwork);
+  }
+
   private async userCollectionArtworks(userId: string) {
     const [collections, purchases] = await Promise.all([
       this.prisma.collectionEntry.findMany({
@@ -557,6 +634,7 @@ export class AiDocentService {
     dailyArtworks,
     collectionArtworks,
     mentionedArtworks,
+    attributeMatchedArtworks,
     candidates,
     contextItems,
   }: {
@@ -564,6 +642,7 @@ export class AiDocentService {
     dailyArtworks: ArtworkForKnowledge[];
     collectionArtworks: CollectionArtwork[];
     mentionedArtworks: ArtworkForKnowledge[];
+    attributeMatchedArtworks: ArtworkForKnowledge[];
     candidates: KnowledgeCandidate[];
     contextItems: DocentContextItem[];
   }) {
@@ -572,20 +651,21 @@ export class AiDocentService {
     const ids = [
       ...(intent.collection ? collectionArtworks.map((item) => item.artwork.id) : []),
       ...mentionedArtworks.map((artwork) => artwork.id),
+      ...attributeMatchedArtworks.map((artwork) => artwork.id),
       ...candidates.map((candidate) => candidate.artworkId),
       ...contextItems.flatMap((item) => (item.artworkId ? [item.artworkId] : [])),
     ];
     return Array.from(new Set(ids)).slice(0, DOCENT_CONTEXT_LIMIT + DOCENT_DYNAMIC_CONTEXT_LIMIT);
   }
 
-  private normalizeSuggestedArtworkIds(ids: string[], allowedSuggestedArtworkIds: string[]) {
+  private normalizeSuggestedArtworkIds(ids: string[], allowedSuggestedArtworkIds: string[], limit = DOCENT_SUGGESTION_LIMIT) {
     const allowed = Array.from(new Set(allowedSuggestedArtworkIds));
     const selected = ids.filter((id) => allowed.includes(id));
     for (const id of allowed) {
-      if (selected.length >= DOCENT_SUGGESTION_LIMIT) break;
+      if (selected.length >= limit) break;
       if (!selected.includes(id)) selected.push(id);
     }
-    return selected.slice(0, DOCENT_SUGGESTION_LIMIT);
+    return selected.slice(0, limit);
   }
 
   private sourcesForResponse(contextItems: DocentContextItem[], suggestedArtworkIds: string[], intent: DocentIntent) {
@@ -636,6 +716,72 @@ export class AiDocentService {
     if (image.includes("clevelandart.org")) return "Cleveland Museum of Art 공개 컬렉션 데이터/이미지";
     if (image.startsWith("/artworks/")) return "ArtCatch 앱에 포함된 로컬 대표 작품 이미지";
     return "ArtCatch 작품 데이터베이스";
+  }
+
+  private artworkAttributeValues(artwork: ArtworkForKnowledge) {
+    return [
+      artwork.origin,
+      artwork.period,
+      artwork.region,
+      artwork.artist,
+      ...artwork.category,
+      ...artwork.tags,
+    ].filter(Boolean);
+  }
+
+  private docentCacheKey(userId: string, message: string, dateKey: string, intent: DocentIntent, collectionArtworks: CollectionArtwork[]) {
+    const collectionKey = intent.collection
+      ? collectionArtworks.map((item) => `${item.artwork.id}:${item.createdAt.toISOString()}`).join("|")
+      : "";
+    return [
+      userId,
+      this.normalizeText(message),
+      dateKey,
+      intent.daily ? "daily" : "",
+      intent.collection ? `collection:${collectionKey}` : "",
+      intent.museum ? "museum" : "",
+    ].join("::");
+  }
+
+  private getCachedDocentAnswer(key: string) {
+    const cached = this.answerCache.get(key);
+    if (!cached) return null;
+    if (cached.expiresAt < Date.now()) {
+      this.answerCache.delete(key);
+      return null;
+    }
+    return cached.result;
+  }
+
+  private setCachedDocentAnswer(key: string, result: DocentChatResult) {
+    if (this.answerCache.size > 100) {
+      const firstKey = this.answerCache.keys().next().value;
+      if (firstKey) this.answerCache.delete(firstKey);
+    }
+    this.answerCache.set(key, { expiresAt: Date.now() + DOCENT_CACHE_TTL_MS, result });
+  }
+
+  private cleanAnswer(answer: string, artworkIds: string[]) {
+    let cleaned = answer.replace(/\u001b\[[0-9;]*m/g, "").replace(/[\u001b\u001d]/g, "");
+    for (const id of new Set(artworkIds)) {
+      if (!id) continue;
+      cleaned = cleaned.replace(new RegExp(`\\b${this.escapeRegExp(id)}\\b`, "gi"), "");
+    }
+    cleaned = cleaned
+      .replace(/\b(?:aic|cma)-[a-z0-9-]+\b/gi, "")
+      .replace(/(?:현재\s*)?(?:ArtCatch|아트캐치|사이트|현재 사이트)\s*데이터(?:가|는)?\s*(?:부족|제한)[^.!?\n]*(?:[.!?]\s*)?/gi, "")
+      .replace(/(?:제공된|주어진)\s*(?:맥락|정보|데이터)(?:이|가|는)?\s*(?:부족|제한)[^.!?\n]*(?:[.!?]\s*)?/g, "")
+      .replace(/(?:current\s+)?ArtCatch\s+data\s+is\s+(?:limited|insufficient)[^.!?\n]*(?:[.!?]\s*)?/gi, "")
+      .replace(/context\s+is\s+(?:limited|insufficient)[^.!?\n]*(?:[.!?]\s*)?/gi, "")
+      .replace(/\s+([,.!?])/g, "$1")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    return cleaned || answer.trim();
+  }
+
+  private escapeRegExp(value: string) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   private normalizeText(value: string) {

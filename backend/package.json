@@ -12,7 +12,9 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:seed": "node prisma/seed.mjs",
-    "test:auto-mod": "node scripts/test-auto-mod.mjs"
+    "test:auto-mod": "node scripts/test-auto-mod.mjs",
+    "test:post-preflight": "node scripts/test-post-preflight.mjs",
+    "test:ai-docent": "node scripts/test-ai-docent-utils.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",

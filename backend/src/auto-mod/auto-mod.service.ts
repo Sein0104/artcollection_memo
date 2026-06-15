@@ -25,6 +25,7 @@ type AutoModInput = {
   body: string;
   postId?: string;
   parentId?: string;
+  useLlm?: boolean;
 };
 
 type RuleFinding = {
@@ -83,7 +84,7 @@ export class AutoModService {
     this.rulePrecheck(state);
     state.context = await this.loadContext(input.authorId);
 
-    if (this.shouldUseLlm()) {
+    if (input.useLlm !== false && this.shouldUseLlm()) {
       state.llmDecision = await this.llmContextJudge(state).catch((error) => ({
         categories: ["llm_unavailable"],
         reason: error instanceof Error ? error.message : "llm_unavailable",
@@ -101,6 +102,7 @@ export class AutoModService {
     commentId,
     authorId,
     decision,
+    status,
   }: {
     targetType: AutoModTargetType;
     targetId: string;
@@ -108,8 +110,9 @@ export class AutoModService {
     commentId?: string;
     authorId: string;
     decision: AutoModDecision;
+    status?: string;
   }) {
-    const caseStatus = decision.action === "hold" || decision.action === "report" ? "open" : "resolved";
+    const caseStatus = status ?? (decision.action === "hold" || decision.action === "report" ? "open" : "resolved");
     const moderationCase = await this.prisma.moderationCase.create({
       data: {
         targetType,
@@ -153,8 +156,12 @@ export class AutoModService {
       severity: decision.severity,
       confidence: decision.confidence,
       categories: decision.categories,
-      authorMessage: decision.authorMessage,
+      authorMessage: this.noticeMessageFor(decision),
     };
+  }
+
+  isBlockingAction(action: AutoModAction) {
+    return action === "hold" || action === "report";
   }
 
   async listCases(status = "open") {
@@ -447,8 +454,15 @@ export class AutoModService {
 
   private defaultAuthorMessage(action: AutoModAction) {
     if (action === "warn") return "표현을 조금 부드럽게 수정하면 더 좋은 대화가 될 수 있어요.";
-    if (action === "hold" || action === "report") return "게시물이 운영자 검토 대기로 전환되었습니다.";
+    if (action === "hold" || action === "report") return "비하, 모욕, 위협, 개인정보 노출 위험이 감지되어 업로드되지 않았어요. 표현을 수정한 뒤 다시 시도해주세요.";
     return "";
+  }
+
+  private noticeMessageFor(decision: AutoModDecision) {
+    if (this.isBlockingAction(decision.action)) {
+      return "비하, 모욕, 위협, 개인정보 노출 위험이 감지되어 업로드되지 않았어요. 표현을 수정한 뒤 다시 시도해주세요.";
+    }
+    return decision.authorMessage;
   }
 
   private defaultAdminSummary(action: AutoModAction, reason: string) {

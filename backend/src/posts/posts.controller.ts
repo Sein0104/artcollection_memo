@@ -32,6 +32,11 @@ export class PostsController {
     return this.posts.comment(id, body, request.headers.cookie);
   }
 
+  @Delete(":id/comments/:commentId")
+  removeComment(@Param("id") id: string, @Param("commentId") commentId: string, @Req() request: RequestWithCookie) {
+    return this.posts.removeComment(id, commentId, request.headers.cookie);
+  }
+
   @Post(":id/vote")
   vote(@Param("id") id: string, @Body() body: VotePostDto, @Req() request: RequestWithCookie) {
     return this.posts.vote(id, body, request.headers.cookie);

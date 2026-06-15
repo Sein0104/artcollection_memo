@@ -4,7 +4,8 @@ import { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const EXTERNAL_SEARCH_LIMIT = 5;
-const MCP_SEARCH_TIMEOUT_MS = 18_000;
+const MCP_SEARCH_TIMEOUT_MS = 12_000;
+const EXTERNAL_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
 const MCP_SEARCH_DEFAULT_TOOL = "tavily_search";
 
 type ExternalSearchResult = {
@@ -25,6 +26,8 @@ type JsonRpcMessage = {
 
 @Injectable()
 export class ExternalSearchService {
+  private readonly cache = new Map<string, { expiresAt: number; response: { query: string; provider: "mcp"; configured: boolean; results: ExternalSearchResult[]; message?: string } }>();
+
   constructor(private readonly config: ConfigService) {}
 
   async search(rawQuery: string) {
@@ -33,23 +36,49 @@ export class ExternalSearchService {
       throw new BadRequestException("external_search_query_too_short");
     }
 
+    const cacheKey = query.toLowerCase();
+    const cached = this.getCached(cacheKey);
+    if (cached) return cached;
+
     if (!this.command()) {
-      return {
+      const response = {
         query,
-        provider: "mcp",
+        provider: "mcp" as const,
         configured: false,
-        results: [],
+        results: [] as ExternalSearchResult[],
         message: "mcp_search_not_configured",
       };
+      this.setCached(cacheKey, response);
+      return response;
     }
 
     const payload = await this.callMcpSearchTool(query);
-    return {
+    const response = {
       query,
-      provider: "mcp",
+      provider: "mcp" as const,
       configured: true,
       results: this.normalizeResults(payload).slice(0, EXTERNAL_SEARCH_LIMIT),
     };
+    this.setCached(cacheKey, response);
+    return response;
+  }
+
+  private getCached(key: string) {
+    const cached = this.cache.get(key);
+    if (!cached) return null;
+    if (cached.expiresAt < Date.now()) {
+      this.cache.delete(key);
+      return null;
+    }
+    return cached.response;
+  }
+
+  private setCached(key: string, response: { query: string; provider: "mcp"; configured: boolean; results: ExternalSearchResult[]; message?: string }) {
+    if (this.cache.size > 100) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey) this.cache.delete(firstKey);
+    }
+    this.cache.set(key, { expiresAt: Date.now() + EXTERNAL_SEARCH_CACHE_TTL_MS, response });
   }
 
   private async callMcpSearchTool(query: string) {
