@@ -1405,13 +1405,24 @@ function PostDetailPage({
     const form = new FormData(event.currentTarget);
     const body = String(form.get("body")).trim();
     if (!body) return false;
-    const result = await api.createComment(postId, { body, parentId });
-    setPost(result.post);
-    const moderationMessage = moderationNoticeMessage(result.moderation);
-    if (moderationMessage) showToast(moderationMessage);
-    if (isModerationBlocked(result.moderation)) return false;
-    setReplyTo(null);
-    return true;
+    try {
+      const result = await api.createComment(postId, { body, parentId });
+      setPost(result.post);
+      const moderationMessage = moderationNoticeMessage(result.moderation);
+      if (moderationMessage) showToast(moderationMessage);
+      if (isModerationBlocked(result.moderation)) return false;
+      setReplyTo(null);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message === "login_required") {
+        window.location.hash = "#login";
+        showToast("로그인 후 댓글을 달 수 있어요.");
+      } else {
+        showToast("댓글을 등록하지 못했습니다.");
+      }
+      return false;
+    }
   }
 
   async function deletePost() {

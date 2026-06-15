@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { AutoModService } from "../dist/auto-mod/auto-mod.service.js";
 
-function fakePrisma({ warningCount = 0, heldCount = 0 } = {}) {
+function fakePrisma({ warningCount = 0, heldCount = 0, safeHistoryOnly = false } = {}) {
+  function matchesRiskCategoryFilter(where = {}) {
+    return Boolean(where.categories?.hasSome || where.case?.is?.categories?.hasSome);
+  }
+
   return {
     moderationWarning: {
-      count: async () => warningCount,
+      count: async ({ where } = {}) => (safeHistoryOnly && matchesRiskCategoryFilter(where) ? 0 : warningCount),
       create: async ({ data }) => ({ id: "warning-test", ...data }),
     },
     moderationCase: {
-      count: async () => heldCount,
+      count: async ({ where } = {}) => (safeHistoryOnly && matchesRiskCategoryFilter(where) ? 0 : heldCount),
       create: async ({ data }) => ({ id: "case-test", ...data }),
       findUnique: async () => null,
       findMany: async () => [],
@@ -19,7 +23,7 @@ function fakePrisma({ warningCount = 0, heldCount = 0 } = {}) {
     postComment: {
       update: async ({ data }) => ({ id: "comment-test", ...data }),
     },
-    $transaction: async (callback) => callback(fakePrisma({ warningCount, heldCount })),
+    $transaction: async (callback) => callback(fakePrisma({ warningCount, heldCount, safeHistoryOnly })),
   };
 }
 
@@ -70,6 +74,18 @@ const cases = [
     body: "이 글은 바보 같네요.",
     options: { warningCount: 3 },
     expectedAction: "hold",
+  },
+  {
+    name: "clean comment is allowed despite prior history",
+    body: "ㅋㅋ",
+    options: { warningCount: 39, heldCount: 39 },
+    expectedAction: "allow",
+  },
+  {
+    name: "safe moderation history does not escalate a mild warning",
+    body: "이 댓글은 너무 바보 같아요.",
+    options: { warningCount: 39, heldCount: 39, safeHistoryOnly: true },
+    expectedAction: "warn",
   },
 ];
 

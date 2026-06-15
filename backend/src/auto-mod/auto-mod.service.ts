@@ -51,6 +51,18 @@ type AutoModState = {
 
 const AUTOMOD_TIMEOUT_MS = 20_000;
 const VALID_ACTIONS = new Set<AutoModAction>(["allow", "warn", "hold", "report"]);
+const HISTORY_RISK_CATEGORIES = [
+  "spam",
+  "threat",
+  "privacy",
+  "privacy_risk",
+  "account_security",
+  "credential-exposure",
+  "security-risk",
+  "contextual_attack",
+  "harassment",
+  "insult",
+];
 const AUTOMOD_RESPONSE_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -311,6 +323,11 @@ export class AutoModService {
         where: {
           userId: authorId,
           createdAt: { gte: since },
+          case: {
+            is: {
+              categories: { hasSome: HISTORY_RISK_CATEGORIES },
+            },
+          },
         },
       }),
       this.prisma.moderationCase.count({
@@ -318,6 +335,7 @@ export class AutoModService {
           authorId,
           createdAt: { gte: since },
           action: { in: ["hold", "report"] },
+          categories: { hasSome: HISTORY_RISK_CATEGORIES },
         },
       }),
     ]);
@@ -379,16 +397,17 @@ export class AutoModService {
       ...(strongest ? state.findings.map((finding) => finding.category) : []),
       ...this.stringArray(state.llmDecision?.categories),
     ]);
+    const hasCurrentRiskSignal = Boolean(strongest) || Boolean(llmAction && llmAction !== "allow");
 
     let action: AutoModAction = llmAction ?? "allow";
     if (!llmAction) {
       if (escalatedSeverity >= 5 || categories.includes("threat") || categories.includes("privacy_risk")) action = "report";
-      else if (escalatedSeverity >= 4 || state.context.heldOrReportedCount30d >= 2) action = "hold";
+      else if (escalatedSeverity >= 4 || (hasCurrentRiskSignal && state.context.heldOrReportedCount30d >= 2)) action = "hold";
       else if (escalatedSeverity >= 3 || categories.includes("harassment")) action = "warn";
     }
 
-    if (action === "allow" && escalatedSeverity >= 3) action = "warn";
-    if (action === "warn" && (escalatedSeverity >= 4 || state.context.warningCount30d >= 3)) action = "hold";
+    if (hasCurrentRiskSignal && action === "allow" && escalatedSeverity >= 3) action = "warn";
+    if (hasCurrentRiskSignal && action === "warn" && (escalatedSeverity >= 4 || state.context.warningCount30d >= 3)) action = "hold";
     if (action === "hold" && escalatedSeverity >= 5) action = "report";
 
     const reason =
