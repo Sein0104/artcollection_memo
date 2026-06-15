@@ -28,7 +28,7 @@ const emptyState: UserState = {
 const tabs = [
   { id: "scan", label: "홈" },
   { id: "artworks", label: "작품 소개" },
-  { id: "collection", label: "내 컬렉션" },
+  { id: "collection", label: "컬렉션" },
   { id: "community", label: "게시판" },
   { id: "docent", label: "AI 도우미" },
 ];
@@ -352,20 +352,22 @@ export function App() {
       </header>
 
       <main>
-        <section className="status-strip">
-          <button className="status-tile title-tile" type="button" onClick={() => setIsTitleGuideOpen(true)}>
-            <span className="label">칭호</span>
-            <strong>{title}</strong>
-          </button>
-          <div className="status-tile">
-            <span className="label">포인트</span>
-            <strong>{session.state.points}P</strong>
-          </div>
-          <div className="status-tile">
-            <span className="label">수집</span>
-            <strong>{collectionCount}점</strong>
-          </div>
-        </section>
+        {route !== "scan" && (
+          <section className="status-strip">
+            <button className="status-tile title-tile" type="button" onClick={() => setIsTitleGuideOpen(true)}>
+              <span className="label">칭호</span>
+              <strong>{title}</strong>
+            </button>
+            <div className="status-tile">
+              <span className="label">포인트</span>
+              <strong>{session.state.points}P</strong>
+            </div>
+            <div className="status-tile">
+              <span className="label">수집</span>
+              <strong>{collectionCount}점</strong>
+            </div>
+          </section>
+        )}
 
         {(isBootstrapping || bootstrapError) && (
           <ApiNotice
@@ -382,6 +384,10 @@ export function App() {
             artworks={artworks}
             daily={daily}
             session={session}
+            title={title}
+            points={session.state.points}
+            collectionCount={collectionCount}
+            onOpenTitleGuide={() => setIsTitleGuideOpen(true)}
             onCompleteMission={completeMission}
             onBuyReward={buyReward}
             showToast={showToast}
@@ -429,6 +435,10 @@ function ScanPage({
   artworks,
   daily,
   session,
+  title,
+  points,
+  collectionCount,
+  onOpenTitleGuide,
   onCompleteMission,
   onBuyReward,
   showToast,
@@ -437,6 +447,10 @@ function ScanPage({
   artworks: Artwork[];
   daily: DailyMissions | null;
   session: Session;
+  title: string;
+  points: number;
+  collectionCount: number;
+  onOpenTitleGuide: () => void;
   onCompleteMission: (artworkId: string) => Promise<void>;
   onBuyReward: (artworkId: string) => void;
   showToast: (message: string) => void;
@@ -444,6 +458,7 @@ function ScanPage({
 }) {
   const [challengeArt, setChallengeArt] = useState<Artwork | null>(null);
   const featured = artworks.filter((art) => !art.premium).slice(0, 6);
+  const dailyMissions = daily?.missions ?? [];
   const weeklyRewards = weeklySelection(
     artworks.filter((art) => art.premium),
     4,
@@ -454,6 +469,8 @@ function ScanPage({
       .map((entry) => entry.artworkId),
   );
   const completedMissionCount = completedMissionIds.size;
+  const heroArt = dailyMissions[0] ?? featured[0] ?? artworks[0] ?? null;
+  const featuredResult = dailyMissions.find((art) => !completedMissionIds.has(art.id)) ?? dailyMissions[0] ?? featured[0] ?? null;
 
   function openMission(art: Artwork) {
     if (!session.user) {
@@ -465,81 +482,44 @@ function ScanPage({
   }
 
   return (
-    <section className="app-page is-active">
-      <div className="page-title">
-        <span className="eyebrow">HOME</span>
-        <h1>사진과 닮은 작품 찾기</h1>
-      </div>
+    <section className="app-page is-active scan-curation-page">
+      <ScanHero
+        heroArt={heroArt}
+        focusArt={featuredResult}
+        title={title}
+        points={points}
+        collectionCount={collectionCount}
+        completedMissionCount={completedMissionCount}
+        onOpenTitleGuide={onOpenTitleGuide}
+        onOpenMission={openMission}
+        openImage={openImage}
+      />
 
-      <section className="mission-panel wide">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">DAILY</span>
-            <h2>오늘의 미션 3개</h2>
-            <p className="section-note">통과한 미션 1개마다 80P를 받을 수 있어요.</p>
-          </div>
-          <span className="count-pill">완료 {completedMissionCount}/3</span>
-        </div>
-        <div className="results-grid">
-          {daily?.missions.map((art) => {
-            const isCompleted = completedMissionIds.has(art.id);
-            const isLimitReached = completedMissionCount >= 3;
-            return (
-              <ArtCard
-                key={art.id}
-                art={art}
-                openImage={openImage}
-                action={
-                  <button disabled={isCompleted || isLimitReached} onClick={() => openMission(art)}>
-                    {isCompleted ? "완료" : isLimitReached ? "오늘 완료" : "미션 도전"}
-                  </button>
-                }
-              />
-            );
-          })}
-        </div>
-      </section>
+      <ScanUploadPanel
+        dailyMissions={dailyMissions}
+        completedMissionIds={completedMissionIds}
+        completedMissionCount={completedMissionCount}
+        openMission={openMission}
+        openImage={openImage}
+      />
 
-      <section className="catalog-section">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">FEATURED</span>
-            <h2>추천 작품</h2>
-          </div>
-          <a className="section-link" href="#artworks">
-            더보기
-          </a>
-        </div>
-        <div className="catalog-grid compact">
-          {featured.map((art) => (
-            <ArtCard key={art.id} art={art} openImage={openImage} />
-          ))}
-        </div>
-      </section>
+      <FeaturedScanResult
+        art={featuredResult}
+        isCompleted={featuredResult ? completedMissionIds.has(featuredResult.id) : false}
+        isLimitReached={completedMissionCount >= 3}
+        onOpenMission={openMission}
+        openImage={openImage}
+      />
 
-      <section className="reward-section">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">POINT SHOP</span>
-            <h2>이번 주 포인트 상점</h2>
-            <p className="section-note">매주 월요일에 4개 작품이 새로 바뀌어요.</p>
-          </div>
-        </div>
-        <div className="reward-grid">
-          {weeklyRewards.map((art) => (
-            <ArtCard
-              key={art.id}
-              art={art}
-              openImage={openImage}
-              action={
-                <button disabled={session.state.purchases.includes(art.id) || session.state.points < art.cost} onClick={() => onBuyReward(art.id)}>
-                  {session.state.purchases.includes(art.id) ? "설치완료" : `${art.cost}P 교환`}
-                </button>
-              }
-            />
-          ))}
-        </div>
-      </section>
+      <ScanResultCollectionGrid
+        featured={featured}
+        weeklyRewards={weeklyRewards}
+        session={session}
+        onBuyReward={onBuyReward}
+        openImage={openImage}
+      />
+
+      <ScanFooter />
 
       {challengeArt && (
         <MissionChallengeModal
@@ -860,7 +840,7 @@ function CollectionPage({ artworks, session, openImage }: { artworks: Artwork[];
     <section className="app-page is-active">
       <div className="page-title">
         <span className="eyebrow">COLLECTION</span>
-        <h1>내 컬렉션</h1>
+        <h1>컬렉션</h1>
       </div>
       <div className="collection-progress">
         {allProgress.map((item) => {
@@ -969,6 +949,236 @@ function ExternalSearchPanel({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function ScanHero({
+  heroArt,
+  focusArt,
+  title,
+  points,
+  collectionCount,
+  completedMissionCount,
+  onOpenTitleGuide,
+  onOpenMission,
+  openImage,
+}: {
+  heroArt: Artwork | null;
+  focusArt: Artwork | null;
+  title: string;
+  points: number;
+  collectionCount: number;
+  completedMissionCount: number;
+  onOpenTitleGuide: () => void;
+  onOpenMission: (art: Artwork) => void;
+  openImage: (art: Artwork) => void;
+}) {
+  const heroStyle: CSSProperties | undefined = heroArt
+    ? {
+        backgroundImage: `linear-gradient(90deg, rgba(21, 17, 13, 0.82) 0%, rgba(21, 17, 13, 0.58) 48%, rgba(21, 17, 13, 0.18) 100%), url("${heroArt.image || placeholder(heroArt)}")`,
+      }
+    : undefined;
+
+  return (
+    <section className="scan-hero" style={heroStyle}>
+      <div className="scan-hero-content">
+        <span className="eyebrow">ARTCATCH CURATION</span>
+        <h1>스캔 결과를 하나의 전시처럼 탐색하세요</h1>
+        <p>
+          오늘의 미션 작품을 고르고 사진을 비교하면, 닮은 지점과 수집 흐름을 컬렉션처럼 이어서 볼 수 있어요.
+        </p>
+        <div className="scan-hero-actions">
+          <button disabled={!focusArt} onClick={() => focusArt && onOpenMission(focusArt)}>
+            오늘의 스캔 시작
+          </button>
+          {heroArt && (
+            <button className="ghost-button hero-ghost" onClick={() => openImage(heroArt)}>
+              대표 작품 보기
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="scan-hero-status" aria-label="사용자 수집 상태">
+        <button className="status-tile title-tile" type="button" onClick={onOpenTitleGuide}>
+          <span className="label">칭호</span>
+          <strong>{title}</strong>
+        </button>
+        <div className="status-tile">
+          <span className="label">포인트</span>
+          <strong>{points}P</strong>
+        </div>
+        <div className="status-tile">
+          <span className="label">수집</span>
+          <strong>{collectionCount}점</strong>
+        </div>
+        <div className="status-tile">
+          <span className="label">오늘 완료</span>
+          <strong>{completedMissionCount}/3</strong>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ScanUploadPanel({
+  dailyMissions,
+  completedMissionIds,
+  completedMissionCount,
+  openMission,
+  openImage,
+}: {
+  dailyMissions: Artwork[];
+  completedMissionIds: Set<string>;
+  completedMissionCount: number;
+  openMission: (art: Artwork) => void;
+  openImage: (art: Artwork) => void;
+}) {
+  const isLimitReached = completedMissionCount >= 3;
+
+  return (
+    <section className="scan-upload-panel">
+      <div className="section-heading">
+        <div>
+          <span className="eyebrow">SCAN UPLOAD</span>
+          <h2>오늘의 미션 전시실</h2>
+          <p className="section-note">작품을 선택하면 사진 업로드와 AI 유사도 비교가 이어져요.</p>
+        </div>
+        <span className="count-pill">완료 {completedMissionCount}/3</span>
+      </div>
+      <div className="mission-curation-grid">
+        {dailyMissions.map((art) => {
+          const isCompleted = completedMissionIds.has(art.id);
+          return (
+            <ArtCard
+              key={art.id}
+              art={art}
+              openImage={openImage}
+              action={
+                <button disabled={isCompleted || isLimitReached} onClick={() => openMission(art)}>
+                  {isCompleted ? "완료" : isLimitReached ? "오늘 완료" : "스캔 도전"}
+                </button>
+              }
+            />
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function FeaturedScanResult({
+  art,
+  isCompleted,
+  isLimitReached,
+  onOpenMission,
+  openImage,
+}: {
+  art: Artwork | null;
+  isCompleted: boolean;
+  isLimitReached: boolean;
+  onOpenMission: (art: Artwork) => void;
+  openImage: (art: Artwork) => void;
+}) {
+  if (!art) return null;
+  const title = displayArtworkTitle(art);
+
+  return (
+    <section className="featured-result">
+      <button className="featured-result-image" onClick={() => openImage(art)} style={thumbStyle(art)} aria-label={`${title} 이미지 확대`}>
+        <img
+          src={art.image || placeholder(art)}
+          onError={(event) => {
+            event.currentTarget.onerror = null;
+            event.currentTarget.src = placeholder(art);
+          }}
+          alt={title}
+        />
+      </button>
+      <div className="featured-result-copy">
+        <span className="eyebrow">FEATURED RESULT</span>
+        <h2>{title}</h2>
+        <p>{formatArtworkMeta(art)}</p>
+        <div className="featured-result-actions">
+          <button disabled={isCompleted || isLimitReached} onClick={() => onOpenMission(art)}>
+            {isCompleted ? "이미 완료한 작품" : isLimitReached ? "오늘 미션 완료" : "이 작품으로 스캔"}
+          </button>
+          <button className="ghost-button" onClick={() => openImage(art)}>
+            작품 크게 보기
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ScanResultCollectionGrid({
+  featured,
+  weeklyRewards,
+  session,
+  onBuyReward,
+  openImage,
+}: {
+  featured: Artwork[];
+  weeklyRewards: Artwork[];
+  session: Session;
+  onBuyReward: (artworkId: string) => void;
+  openImage: (art: Artwork) => void;
+}) {
+  return (
+    <>
+      <section className="result-collection-section">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">COLLECTION</span>
+            <h2>컬렉션</h2>
+          </div>
+          <a className="section-link simple-section-link" href="#artworks">
+            전체 보기
+          </a>
+        </div>
+        <div className="result-collection-grid">
+          {featured.map((art) => (
+            <ArtCard key={art.id} art={art} openImage={openImage} />
+          ))}
+        </div>
+      </section>
+
+      <section className="scan-point-shop-section">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">POINT SHOP</span>
+            <h2>포인트 샵</h2>
+            <p className="section-note">매주 월요일에 4개 작품이 새로 바뀌어요.</p>
+          </div>
+        </div>
+        <div className="reward-grid">
+          {weeklyRewards.map((art) => (
+            <ArtCard
+              key={art.id}
+              art={art}
+              openImage={openImage}
+              action={
+                <button disabled={session.state.purchases.includes(art.id) || session.state.points < art.cost} onClick={() => onBuyReward(art.id)}>
+                  {session.state.purchases.includes(art.id) ? "설치완료" : `${art.cost}P 교환`}
+                </button>
+              }
+            />
+          ))}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function ScanFooter() {
+  return (
+    <footer className="scan-footer">
+      <strong>ArtCatch</strong>
+      <span>오늘의 스캔, 수집한 작품, 게시판 감상을 하나의 관람 동선으로 이어갑니다.</span>
+      <a className="section-link" href="#community">
+        게시판으로 이동
+      </a>
+    </footer>
   );
 }
 
@@ -2035,7 +2245,7 @@ function aiDocentErrorMessage(message: string) {
 
 function docentSourceLabel(type: AiDocentSource["type"]) {
   if (type === "daily_mission") return "오늘 미션";
-  if (type === "user_collection") return "내 컬렉션";
+  if (type === "user_collection") return "컬렉션";
   if (type === "museum") return "출처";
   return "작품 지식";
 }
