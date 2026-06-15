@@ -819,6 +819,94 @@ main {
   text-align: center;
 }
 
+.moderation-page {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.moderation-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.moderation-case {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+
+.moderation-case-main {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.moderation-case-top,
+.moderation-actions,
+.moderation-reason {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.moderation-case-top {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.moderation-case h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.moderation-case p {
+  margin: 0;
+  color: #45413d;
+  line-height: 1.55;
+}
+
+.moderation-risk,
+.board-badge.is-held {
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #fff4dd;
+  color: #8a5b00;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.moderation-risk.is-report,
+.moderation-risk.is-hold {
+  background: #ffe8e4;
+  color: #9f2d20;
+}
+
+.moderation-reason {
+  padding-top: 4px;
+}
+
+.moderation-reason strong {
+  color: var(--ink);
+}
+
+.moderation-reason span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.moderation-actions {
+  align-content: start;
+  justify-content: end;
+}
+
 .docent-page {
   max-width: 1040px;
   margin: 0 auto;
@@ -1637,6 +1725,14 @@ main {
 
   .board-row {
     grid-template-columns: 1fr;
+  }
+
+  .moderation-case {
+    grid-template-columns: 1fr;
+  }
+
+  .moderation-actions {
+    justify-content: start;
   }
 
   .external-search-header,

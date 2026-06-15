@@ -19,6 +19,8 @@ import { AiDocentController } from "./ai-docent/ai-docent.controller";
 import { AiDocentService } from "./ai-docent/ai-docent.service";
 import { ExternalSearchController } from "./external-search/external-search.controller";
 import { ExternalSearchService } from "./external-search/external-search.service";
+import { AutoModController } from "./auto-mod/auto-mod.controller";
+import { AutoModService } from "./auto-mod/auto-mod.service";
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true })],
@@ -32,6 +34,7 @@ import { ExternalSearchService } from "./external-search/external-search.service
     MissionsController,
     AiDocentController,
     ExternalSearchController,
+    AutoModController,
   ],
   providers: [
     PrismaService,
@@ -44,6 +47,7 @@ import { ExternalSearchService } from "./external-search/external-search.service
     MissionsService,
     AiDocentService,
     ExternalSearchService,
+    AutoModService,
   ],
 })
 export class AppModule {}

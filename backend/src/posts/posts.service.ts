@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma.service";
 import { AuthService } from "../auth/auth.service";
+import { AutoModService } from "../auto-mod/auto-mod.service";
 import { CreateCommentDto, CreatePostDto, UpdatePostDto, VotePostDto } from "./dto";
 
 const GENERAL_POST_MUSEUM_ID = "general-post";
@@ -21,47 +22,70 @@ export class PostsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auth: AuthService,
+    private readonly autoMod: AutoModService,
   ) {}
 
   async list() {
     const posts = await this.prisma.post.findMany({
+      where: { status: "published" },
       orderBy: { createdAt: "desc" },
-      include: { author: true, museum: true, comments: true },
+      include: { author: true, museum: true, comments: { where: { status: "published" } } },
     });
     return { posts: posts.map((post) => this.toPostSummary(post)) };
   }
 
-  async detail(id: string) {
+  async detail(id: string, cookieHeader?: string) {
+    const viewer = await this.optionalUserFromCookie(cookieHeader);
     const post = await this.prisma.post.findUnique({
       where: { id },
       include: {
         author: true,
         museum: true,
         comments: {
+          where: { status: "published" },
           orderBy: { createdAt: "asc" },
           include: { author: true },
         },
       },
     });
     if (!post) throw new NotFoundException("post_not_found");
+    if (post.status !== "published" && post.authorId !== viewer?.id) throw new NotFoundException("post_not_found");
     return { post: this.toPostDetail(post) };
   }
 
   async create(dto: CreatePostDto, cookieHeader?: string) {
     const user = await this.auth.requireUserFromCookie(cookieHeader);
     const museumId = await this.resolveMuseumId(dto.museumId);
+    const title = dto.title.trim();
+    const body = dto.body.trim();
+    if (!title || !body) throw new BadRequestException("post_content_required");
+    const moderation = await this.autoMod.review({
+      targetType: "post",
+      authorId: user.id,
+      title,
+      body,
+    });
 
-    await this.prisma.post.create({
+    const post = await this.prisma.post.create({
       data: {
         authorId: user.id,
-        title: dto.title,
-        body: dto.body,
+        title,
+        body,
         museumId,
         boardType: dto.boardType ?? "free",
+        status: this.autoMod.publicStatusFor(moderation.action),
       },
     });
 
-    return this.list();
+    await this.autoMod.recordCase({
+      targetType: "post",
+      targetId: post.id,
+      postId: post.id,
+      authorId: user.id,
+      decision: moderation,
+    });
+
+    return { ...(await this.list()), moderation: this.autoMod.noticeFor(moderation) };
   }
 
   async comment(postId: string, dto: CreateCommentDto, cookieHeader?: string) {
@@ -69,22 +93,43 @@ export class PostsService {
 
     const post = await this.prisma.post.findUnique({ where: { id: postId } });
     if (!post) throw new NotFoundException("post_not_found");
+    if (post.status !== "published") throw new NotFoundException("post_not_found");
 
     if (dto.parentId) {
       const parent = await this.prisma.postComment.findUnique({ where: { id: dto.parentId } });
-      if (!parent || parent.postId !== postId) throw new BadRequestException("invalid_parent_comment");
+      if (!parent || parent.postId !== postId || parent.status !== "published") throw new BadRequestException("invalid_parent_comment");
     }
 
-    await this.prisma.postComment.create({
+    const body = dto.body.trim();
+    if (!body) throw new BadRequestException("comment_content_required");
+    const moderation = await this.autoMod.review({
+      targetType: "comment",
+      authorId: user.id,
+      body,
+      postId,
+      parentId: dto.parentId,
+    });
+
+    const comment = await this.prisma.postComment.create({
       data: {
         postId,
         authorId: user.id,
         parentId: dto.parentId,
-        body: dto.body,
+        body,
+        status: this.autoMod.publicStatusFor(moderation.action),
       },
     });
 
-    return this.detail(postId);
+    await this.autoMod.recordCase({
+      targetType: "comment",
+      targetId: comment.id,
+      postId,
+      commentId: comment.id,
+      authorId: user.id,
+      decision: moderation,
+    });
+
+    return { ...(await this.detail(postId, cookieHeader)), moderation: this.autoMod.noticeFor(moderation) };
   }
 
   async vote(postId: string, dto: VotePostDto, cookieHeader?: string) {
@@ -92,6 +137,7 @@ export class PostsService {
 
     const post = await this.prisma.post.findUnique({ where: { id: postId } });
     if (!post) throw new NotFoundException("post_not_found");
+    if (post.status !== "published") throw new NotFoundException("post_not_found");
 
     const existingVote = await this.prisma.postVote.findUnique({
       where: {
@@ -130,16 +176,32 @@ export class PostsService {
     const title = dto.title.trim();
     const body = dto.body.trim();
     if (!title || !body) throw new BadRequestException("post_content_required");
+    const moderation = await this.autoMod.review({
+      targetType: "post",
+      authorId: user.id,
+      title,
+      body,
+      postId,
+    });
 
     await this.prisma.post.update({
       where: { id: postId },
       data: {
         title,
         body,
+        status: this.autoMod.publicStatusFor(moderation.action),
       },
     });
 
-    return this.detail(postId);
+    await this.autoMod.recordCase({
+      targetType: "post",
+      targetId: postId,
+      postId,
+      authorId: user.id,
+      decision: moderation,
+    });
+
+    return { ...(await this.detail(postId, cookieHeader)), moderation: this.autoMod.noticeFor(moderation) };
   }
 
   async remove(postId: string, cookieHeader?: string) {
@@ -172,6 +234,14 @@ export class PostsService {
     return museum.id;
   }
 
+  private async optionalUserFromCookie(cookieHeader?: string) {
+    try {
+      return await this.auth.requireUserFromCookie(cookieHeader);
+    } catch {
+      return null;
+    }
+  }
+
   private toPostSummary(post: any) {
     return {
       id: post.id,
@@ -180,6 +250,7 @@ export class PostsService {
       title: post.title,
       body: post.body,
       boardType: post.boardType ?? "free",
+      status: post.status ?? "published",
       museumId: post.museumId,
       museumName: post.museum.name,
       museumScope: post.museum.scope,
@@ -201,6 +272,7 @@ export class PostsService {
           author: comment.author.nickname,
           authorTitle: this.titleFor(comment.author.totalEarnedPoints ?? 0),
           body: comment.body,
+          status: comment.status ?? "published",
           parentId: comment.parentId,
           createdAt: comment.createdAt,
           replies: [],

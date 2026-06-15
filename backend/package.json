@@ -11,7 +11,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
-    "prisma:seed": "node prisma/seed.mjs"
+    "prisma:seed": "node prisma/seed.mjs",
+    "test:auto-mod": "node scripts/test-auto-mod.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",

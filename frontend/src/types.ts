@@ -31,6 +31,7 @@ export type Post = {
   title: string;
   body: string;
   boardType: "free" | "review";
+  status?: "published" | "held" | "rejected";
   museumId: string;
   museumName?: string;
   museumScope?: string;
@@ -47,6 +48,7 @@ export type PostComment = {
   author: string;
   authorTitle?: string;
   body: string;
+  status?: "published" | "held" | "rejected";
   parentId?: string | null;
   createdAt: string;
   replies: PostComment[];
@@ -109,4 +111,34 @@ export type ExternalSearchResponse = {
   configured: boolean;
   results: ExternalSearchResult[];
   message?: string;
+};
+
+export type ModerationNotice = {
+  action: "allow" | "warn" | "hold" | "report";
+  severity: number;
+  confidence: number;
+  categories: string[];
+  authorMessage: string;
+};
+
+export type ModerationCase = {
+  id: string;
+  targetType: "post" | "comment";
+  targetId: string;
+  action: "allow" | "warn" | "hold" | "report";
+  severity: number;
+  confidence: number;
+  categories: string[];
+  reason: string;
+  authorMessage: string;
+  adminSummary: string;
+  status: string;
+  reviewerNote: string;
+  createdAt: string;
+  author: string;
+  content: {
+    title: string;
+    body: string;
+    museumName: string;
+  };
 };

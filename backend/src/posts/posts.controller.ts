@@ -23,8 +23,8 @@ export class PostsController {
   }
 
   @Get(":id")
-  detail(@Param("id") id: string) {
-    return this.posts.detail(id);
+  detail(@Param("id") id: string, @Req() request: RequestWithCookie) {
+    return this.posts.detail(id, request.headers.cookie);
   }
 
   @Post(":id/comments")

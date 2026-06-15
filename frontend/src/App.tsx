@@ -7,6 +7,8 @@ import type {
   DailyMissions,
   ExternalSearchResponse,
   MissionAnalysis,
+  ModerationCase,
+  ModerationNotice,
   Museum,
   Post,
   PostComment,
@@ -30,6 +32,7 @@ const tabs = [
   { id: "collection", label: "내 컬렉션" },
   { id: "community", label: "게시판" },
   { id: "docent", label: "AI 도슨트" },
+  { id: "moderation", label: "운영검토" },
 ];
 
 const titleSteps = [
@@ -182,10 +185,19 @@ const boardTypeLabels: Record<BoardType, string> = {
   review: "후기",
 };
 
+function moderationNoticeMessage(notice?: ModerationNotice) {
+  if (!notice) return "";
+  if (notice.action === "warn") return notice.authorMessage || "표현을 조금 부드럽게 다듬어 주세요.";
+  if (notice.action === "hold" || notice.action === "report") {
+    return notice.authorMessage || "게시물이 운영자 검토 대기로 전환되었습니다.";
+  }
+  return "";
+}
+
 function routeFromHash() {
   const value = window.location.hash.replace("#", "");
   if (value.startsWith("post/")) return value;
-  return ["scan", "artworks", "collection", "community", "docent", "write", "login"].includes(value) ? value : "scan";
+  return ["scan", "artworks", "collection", "community", "docent", "moderation", "write", "login"].includes(value) ? value : "scan";
 }
 
 export function App() {
@@ -368,6 +380,7 @@ export function App() {
         {route === "collection" && <CollectionPage artworks={artworks} session={session} openImage={setSelectedImage} />}
         {route === "community" && <CommunityPage museums={museums} posts={posts} />}
         {route === "docent" && <AiDocentPage session={session} openImage={setSelectedImage} showToast={showToast} />}
+        {route === "moderation" && <ModerationPage session={session} setPosts={setPosts} showToast={showToast} />}
         {route === "write" && <PostWritePage museums={museums} session={session} setPosts={setPosts} showToast={showToast} />}
         {postId && <PostDetailPage postId={postId} session={session} setPosts={setPosts} showToast={showToast} />}
         {route === "login" && <AuthPage />}
@@ -1184,6 +1197,115 @@ function AiDocentPage({
   );
 }
 
+function ModerationPage({
+  session,
+  setPosts,
+  showToast,
+}: {
+  session: Session;
+  setPosts: (posts: Post[]) => void;
+  showToast: (message: string) => void;
+}) {
+  const [cases, setCases] = useState<ModerationCase[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!session.user) return;
+    void loadCases();
+  }, [session.user?.id]);
+
+  async function loadCases() {
+    setIsLoading(true);
+    setError("");
+    try {
+      const result = await api.moderationCases("open");
+      setCases(result.cases);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "moderation_cases_failed");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function reviewCase(id: string, decision: "approve" | "reject" | "resolve") {
+    try {
+      const result = await api.reviewModerationCase(id, { decision });
+      setCases(result.cases);
+      const refreshed = await api.posts();
+      setPosts(refreshed.posts);
+      showToast(decision === "approve" ? "게시물을 승인했습니다." : decision === "reject" ? "게시물을 반려했습니다." : "검토를 완료했습니다.");
+    } catch {
+      showToast("검토 결과를 저장하지 못했습니다.");
+    }
+  }
+
+  if (!session.user) {
+    return (
+      <section className="app-page is-active">
+        <div className="collection-empty">
+          <strong>로그인이 필요합니다.</strong>
+          <a className="primary-link" href="#login">
+            Google 로그인
+          </a>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="app-page is-active moderation-page">
+      <div className="page-title board-title">
+        <div>
+          <span className="eyebrow">AUTO-MOD</span>
+          <h1>운영 검토</h1>
+        </div>
+        <button className="ghost-button" onClick={() => void loadCases()} disabled={isLoading}>
+          새로고침
+        </button>
+      </div>
+
+      <section className="moderation-shell">
+        {isLoading && <div className="board-empty">검토 목록을 불러오는 중입니다.</div>}
+        {error && <div className="board-empty">검토 목록을 불러오지 못했습니다. {error}</div>}
+        {!isLoading && !error && !cases.length && <div className="board-empty">검토 대기 중인 게시물이 없습니다.</div>}
+        {cases.map((item) => (
+          <article className="moderation-case" key={item.id}>
+            <div className="moderation-case-main">
+              <div className="moderation-case-top">
+                <span className={`moderation-risk is-${item.action}`}>{item.action}</span>
+                <span>위험도 {item.severity}/5</span>
+                <span>{Math.round(item.confidence * 100)}%</span>
+                <span>{new Date(item.createdAt).toLocaleString("ko-KR")}</span>
+              </div>
+              <h2>{item.content.title || (item.targetType === "comment" ? "댓글 검토" : "게시글 검토")}</h2>
+              <p>{item.content.body}</p>
+              <div className="post-meta">
+                <span>{item.author}</span>
+                <span>{item.targetType}</span>
+                {item.content.museumName && <span>{item.content.museumName}</span>}
+              </div>
+              <div className="moderation-reason">
+                <strong>{item.adminSummary || item.reason}</strong>
+                <span>{item.categories.join(", ")}</span>
+              </div>
+            </div>
+            <div className="moderation-actions">
+              <button onClick={() => void reviewCase(item.id, "approve")}>승인</button>
+              <button className="ghost-button" onClick={() => void reviewCase(item.id, "resolve")}>
+                해결
+              </button>
+              <button className="ghost-button is-danger" onClick={() => void reviewCase(item.id, "reject")}>
+                반려
+              </button>
+            </div>
+          </article>
+        ))}
+      </section>
+    </section>
+  );
+}
+
 function PostWritePage({
   museums,
   session,
@@ -1225,7 +1347,7 @@ function PostWritePage({
     });
     setPosts(result.posts);
     window.location.hash = "#community";
-    showToast("게시글을 등록했습니다.");
+    showToast(moderationNoticeMessage(result.moderation) || "게시글을 등록했습니다.");
   }
 
   return (
@@ -1317,6 +1439,8 @@ function PostDetailPage({
     const result = await api.createComment(postId, { body, parentId });
     setPost(result.post);
     setReplyTo(null);
+    const moderationMessage = moderationNoticeMessage(result.moderation);
+    if (moderationMessage) showToast(moderationMessage);
     event.currentTarget.reset();
   }
 
@@ -1359,7 +1483,7 @@ function PostDetailPage({
       setIsEditing(false);
       const refreshed = await api.posts();
       setPosts(refreshed.posts);
-      showToast("게시글을 수정했습니다.");
+      showToast(moderationNoticeMessage(result.moderation) || "게시글을 수정했습니다.");
     } catch {
       showToast("게시글을 수정하지 못했습니다.");
     }
@@ -1382,6 +1506,7 @@ function PostDetailPage({
         <div className="post-detail-top">
           <div className="post-detail-meta">
             <span className="board-badge">{boardTypeLabels[(post.boardType ?? "free") as BoardType]}게시판</span>
+            {post.status && post.status !== "published" && <span className="board-badge is-held">검토 대기</span>}
             <span className="author-chip">
               {post.author}
               {post.authorTitle && <em>{post.authorTitle}</em>}

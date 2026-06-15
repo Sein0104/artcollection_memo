@@ -4,6 +4,8 @@ import type {
   DailyMissions,
   ExternalSearchResponse,
   MissionAnalysis,
+  ModerationCase,
+  ModerationNotice,
   Museum,
   Post,
   PostDetail,
@@ -71,9 +73,9 @@ export const api = {
     body: string;
     museumId: string;
     boardType: "free" | "review";
-  }) => request<{ posts: Post[] }>("/posts", { method: "POST", body: JSON.stringify(body) }),
+  }) => request<{ posts: Post[]; moderation?: ModerationNotice }>("/posts", { method: "POST", body: JSON.stringify(body) }),
   createComment: (postId: string, body: { body: string; parentId?: string }) =>
-    request<{ post: PostDetail }>(`/posts/${encodeURIComponent(postId)}/comments`, {
+    request<{ post: PostDetail; moderation?: ModerationNotice }>(`/posts/${encodeURIComponent(postId)}/comments`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
@@ -83,7 +85,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   updatePost: (postId: string, body: { title: string; body: string }) =>
-    request<{ post: PostDetail }>(`/posts/${encodeURIComponent(postId)}`, {
+    request<{ post: PostDetail; moderation?: ModerationNotice }>(`/posts/${encodeURIComponent(postId)}`, {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
@@ -97,4 +99,10 @@ export const api = {
       body: JSON.stringify({ message }),
     }),
   externalSearch: (query: string) => request<ExternalSearchResponse>(`/external-search?q=${encodeURIComponent(query)}`),
+  moderationCases: (status = "open") => request<{ cases: ModerationCase[] }>(`/moderation/cases?status=${encodeURIComponent(status)}`),
+  reviewModerationCase: (id: string, body: { decision: "approve" | "reject" | "resolve"; reviewerNote?: string }) =>
+    request<{ cases: ModerationCase[] }>(`/moderation/cases/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 };
