@@ -14,6 +14,7 @@
     "prisma:seed": "node prisma/seed.mjs",
     "test:auto-mod": "node scripts/test-auto-mod.mjs",
     "test:post-preflight": "node scripts/test-post-preflight.mjs",
+    "test:mission-coach": "node scripts/test-mission-coach.mjs",
     "test:ai-docent": "node scripts/test-ai-docent-utils.mjs"
   },
   "dependencies": {

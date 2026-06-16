@@ -158,7 +158,6 @@ export class PostsService {
       body,
       postId,
       parentId: dto.parentId,
-      useLlm: false,
     });
     if (this.autoMod.isBlockingAction(moderation.action)) {
       await this.autoMod.recordCase({

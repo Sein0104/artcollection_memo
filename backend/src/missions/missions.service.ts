@@ -12,6 +12,7 @@ import { AnalyzeMissionDto, CompleteMissionDto } from "./dto";
 
 const MISSION_PASS_THRESHOLD = 62;
 const EMBEDDING_SIMILARITY_THRESHOLD = 0.74;
+const MIN_SAME_ARTWORK_COACH_RECORDS = 3;
 const DAILY_MISSION_COUNT = 3;
 const RECENT_MISSION_EXCLUSION_DAYS = 3;
 const MISSION_ROTATION_ANCHOR_DATE_KEY = "2026-01-01";
@@ -460,31 +461,29 @@ export class MissionsService {
 
     try {
       const records = await this.prisma.missionAnalysisRecord.findMany({
-        where: { mode },
+        where: { artworkId, mode },
         orderBy: { createdAt: "desc" },
         take: 120,
         include: { artwork: true },
       });
-      const candidates = records
+      const validRecords = records
         .filter((record) => !this.isUnhelpfulCoachRecord(record.feedback, record.analysisText))
         .map((record) => {
           const vector = this.toVector(record.embedding);
-          if (!vector) return null;
-          const artworkBoost = record.artworkId === artworkId ? 0.05 : 0;
-          return { record, similarity: this.cosineSimilarity(embedding, vector) + artworkBoost };
+          return vector ? { record, vector } : null;
         })
-        .filter((item): item is NonNullable<typeof item> => Boolean(item))
+        .filter((item): item is NonNullable<typeof item> => Boolean(item));
+      if (validRecords.length < MIN_SAME_ARTWORK_COACH_RECORDS) return "";
+
+      const candidates = validRecords
+        .map(({ record, vector }) => ({ record, similarity: this.cosineSimilarity(embedding, vector) }))
         .filter((item) => item.similarity >= EMBEDDING_SIMILARITY_THRESHOLD)
         .sort((left, right) => right.similarity - left.similarity);
 
       const best = candidates[0];
       if (!best) return "";
 
-      const sameArtwork = best.record.artworkId === artworkId;
-      const target = sameArtwork ? "이 작품" : `${best.record.artwork.title}`;
-      const resultLabel = best.record.passed ? "좋은 점수" : "낮은 점수";
-      const followUp = best.record.passed ? "이번 사진도 그 강점을 살려보세요." : "이번 사진도 그 부분을 먼저 조정해보세요.";
-      return `미션 코치: ${target}의 비슷한 ${resultLabel} 기록에서는 "${this.trimSentence(best.record.feedback)}"라는 피드백이 있었어요. ${followUp}`;
+      return this.formatCoachTip(best.record);
     } catch {
       return "";
     }
@@ -505,31 +504,32 @@ export class MissionsService {
             r."feedback",
             r."analysisText",
             r."passed",
-            (1 - (r."embeddingVector" <=> $1::vector) + CASE WHEN r."artworkId" = $2 THEN 0.05 ELSE 0 END) AS "similarity"
+            (1 - (r."embeddingVector" <=> $1::vector)) AS "similarity"
           FROM "MissionAnalysisRecord" r
           JOIN "Artwork" a ON a."id" = r."artworkId"
-          WHERE r."mode" = $3
+          WHERE r."artworkId" = $2
+            AND r."mode" = $3
             AND r."embeddingVector" IS NOT NULL
           ORDER BY r."embeddingVector" <=> $1::vector
-          LIMIT 20
+          LIMIT 120
         `,
         vectorLiteral,
         artworkId,
         mode,
       );
-      const best = rows
+      const validRows = rows
         .filter((row) => !this.isUnhelpfulCoachRecord(row.feedback, row.analysisText))
         .map((row) => ({ row, similarity: Number(row.similarity) }))
-        .filter((item) => Number.isFinite(item.similarity) && item.similarity >= EMBEDDING_SIMILARITY_THRESHOLD)
+        .filter((item) => Number.isFinite(item.similarity));
+      if (validRows.length < MIN_SAME_ARTWORK_COACH_RECORDS) return "";
+
+      const best = validRows
+        .filter((item) => item.similarity >= EMBEDDING_SIMILARITY_THRESHOLD)
         .sort((left, right) => right.similarity - left.similarity)[0];
 
       if (!best) return "";
 
-      const sameArtwork = best.row.artworkId === artworkId;
-      const target = sameArtwork ? "같은 작품" : best.row.artworkTitle;
-      const resultLabel = best.row.passed ? "좋은 점수" : "낮은 점수";
-      const followUp = best.row.passed ? "이번 사진도 그 강점을 살려보세요." : "이번 사진에서는 그 부분을 먼저 조정해보세요.";
-      return `미션 코치: ${target}과 비슷한 ${resultLabel} 기록에서 "${this.trimSentence(best.row.feedback)}"라는 피드백이 있었어요. ${followUp}`;
+      return this.formatCoachTip(best.row);
     } catch (error) {
       if (isPgVectorUnavailable(error)) {
         this.pgVectorReadDisabled = true;
@@ -618,6 +618,12 @@ export class MissionsService {
   private trimSentence(text: string) {
     const normalized = text.replace(/\s+/g, " ").trim();
     return normalized.length > 90 ? `${normalized.slice(0, 87)}...` : normalized;
+  }
+
+  private formatCoachTip(record: { feedback: string; passed: boolean }) {
+    const resultLabel = record.passed ? "높은 점수" : "낮은 점수";
+    const followUp = record.passed ? "이번 사진도 그 강점을 살려보세요." : "이번 사진에서는 그 부분을 먼저 조정해보세요.";
+    return `미션 코치: 같은 작품의 ${resultLabel} 기록에서 "${this.trimSentence(record.feedback)}"라는 피드백이 있었어요. ${followUp}`;
   }
 
   private isUnhelpfulCoachRecord(feedback: string, analysisText: string) {

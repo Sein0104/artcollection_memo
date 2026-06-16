@@ -189,14 +189,15 @@ const BOARD_POSTS_PER_PAGE = 8;
 function moderationNoticeMessage(notice?: ModerationNotice) {
   if (!notice) return "";
   if (notice.action === "warn") return notice.authorMessage || "표현을 조금 부드럽게 다듬어 주세요.";
-  if (notice.action === "hold" || notice.action === "report") {
+  if (notice.action === "hold") return notice.authorMessage || "표현에 주의가 필요한 내용이 감지되었어요. 등록은 완료되었지만 표현을 조금 부드럽게 다듬어 주세요.";
+  if (notice.action === "report") {
     return notice.authorMessage || "비하, 모욕, 위협, 개인정보 노출 위험이 감지되어 업로드되지 않았어요. 표현을 수정한 뒤 다시 시도해주세요.";
   }
   return "";
 }
 
 function isModerationBlocked(notice?: ModerationNotice) {
-  return notice?.action === "hold" || notice?.action === "report";
+  return notice?.action === "report";
 }
 
 function routeFromHash() {
