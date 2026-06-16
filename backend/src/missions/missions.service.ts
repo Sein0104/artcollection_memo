@@ -647,7 +647,15 @@ export class MissionsService {
       `Important visual tags: ${artwork.tags.join(", ")}.`,
       `Use this pass threshold: ${MISSION_PASS_THRESHOLD}.`,
       mode === "pose"
-        ? "The user is allowed to creatively imitate the artwork with people, poses, props, clothing, or staging. Score 0-100 by resemblance of pose, composition, subject placement, dominant shapes, colors, lighting, mood, and playful reinterpretation. Do not require the photo to be a direct photograph of the artwork."
+        ? [
+            "The user is playing an approachable art-imitation mission, not doing forensic image matching.",
+            "Be generous when the submitted photo clearly tries to imitate the artwork.",
+            "Prioritize recognizable intent, core pose or gesture, main silhouette or dominant shape, subject placement, composition, color palette, lighting mood, and playful reinterpretation.",
+            "Do not require the same background, museum setting, exact props, exact clothing, exact number of people, exact camera angle, or a direct photograph of the artwork. Treat those details as bonus points only.",
+            "If at least two major elements are recognizable, such as pose/gesture, composition, color/mood, or main shape, the score should usually be at least the pass threshold.",
+            "If one major element is strong and another is partially present, score around 50-61 rather than pushing it into the 30s.",
+            "Reserve scores below 45 for photos that are mostly unrelated or missing the artwork's core visual idea.",
+          ].join(" ")
         : "The user is trying to photograph a real scene or object that resembles the artwork. Score 0-100 by visual similarity: composition, subject placement, dominant shapes, colors, lighting, and mood.",
       "Return only strict JSON with this exact shape:",
       '{"score":72,"passed":true,"feedback":"Korean feedback in one concise, actionable sentence.","analysisText":"Korean summary of composition, color, distance, pose, and lighting reasons.","aspects":{"composition":"Korean note","color":"Korean note","distance":"Korean note","pose":"Korean note","lighting":"Korean note"}}',
