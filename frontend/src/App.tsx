@@ -6,6 +6,7 @@ import type {
   Artwork,
   DailyMissions,
   ExternalSearchResponse,
+  ImageSearchResponse,
   MissionAnalysis,
   ModerationNotice,
   Museum,
@@ -28,6 +29,7 @@ const emptyState: UserState = {
 const tabs = [
   { id: "scan", label: "홈" },
   { id: "artworks", label: "작품 소개" },
+  { id: "image-search", label: "이미지 검색" },
   { id: "collection", label: "컬렉션" },
   { id: "community", label: "게시판" },
   { id: "docent", label: "AI 도우미" },
@@ -203,7 +205,7 @@ function isModerationBlocked(notice?: ModerationNotice) {
 function routeFromHash() {
   const value = window.location.hash.replace("#", "");
   if (value.startsWith("post/")) return value;
-  return ["scan", "artworks", "collection", "community", "docent", "write", "login"].includes(value) ? value : "scan";
+  return ["scan", "artworks", "image-search", "collection", "community", "docent", "write", "login"].includes(value) ? value : "scan";
 }
 
 function boardMuseums(museums: Museum[]) {
@@ -403,6 +405,7 @@ export function App() {
           />
         )}
         {route === "artworks" && <ArtworksPage artworks={artworks} openImage={setSelectedImage} />}
+        {route === "image-search" && <ImageSearchPage openImage={setSelectedImage} />}
         {route === "collection" && <CollectionPage artworks={artworks} session={session} openImage={setSelectedImage} />}
         {route === "community" && <CommunityPage museums={museums} posts={posts} />}
         {route === "docent" && <AiDocentPage session={session} openImage={setSelectedImage} showToast={showToast} />}
@@ -586,6 +589,126 @@ function ArtworksPage({
           ))}
         </div>
       </section>
+    </section>
+  );
+}
+
+function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [result, setResult] = useState<ImageSearchResponse | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [error, setError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const bestMatch = result?.bestMatch ?? result?.matches[0] ?? null;
+
+  async function handleFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setError("이미지 파일만 사용할 수 있습니다.");
+      return;
+    }
+
+    setIsSearching(true);
+    setError("");
+    setResult(null);
+    try {
+      const imageDataUrl = await imageFileToMissionDataUrl(file);
+      setPreviewUrl(imageDataUrl);
+      const response = await api.searchSimilarImage(imageDataUrl);
+      setResult(response);
+      if (!response.bestMatch && !response.matches.length) {
+        setError(response.indexedCount ? "비슷한 작품을 찾지 못했습니다." : "작품 이미지 임베딩이 아직 없습니다. 백필 스크립트를 먼저 실행해주세요.");
+      }
+    } catch (searchError) {
+      const message = searchError instanceof Error ? searchError.message : "image_search_failed";
+      setError(imageSearchErrorMessage(message));
+    } finally {
+      setIsSearching(false);
+    }
+  }
+
+  return (
+    <section className="app-page image-search-page is-active">
+      <div className="page-title board-title">
+        <div>
+          <span className="eyebrow">IMAGE SEARCH</span>
+          <h1>사진과 닮은 작품 찾기</h1>
+        </div>
+        {result && <span className="count-pill">{result.indexedCount}/{result.artworkCount} indexed</span>}
+      </div>
+
+      <section className="image-search-panel">
+        <div className="image-search-copy">
+          <h2>사진 한 장으로 가장 가까운 작품을 찾습니다</h2>
+          <p>로컬 CLIP으로 후보를 넓게 찾고, Vision LLM이 후보들을 다시 비교해 최종 작품을 고릅니다.</p>
+        </div>
+        <div className="image-search-actions">
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isSearching}>
+            {isSearching ? "검색 중" : "사진 선택"}
+          </button>
+          <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={handleFile} />
+        </div>
+        {previewUrl && (
+          <figure className="image-search-preview">
+            <img src={previewUrl} alt="검색에 사용한 사진" />
+          </figure>
+        )}
+        {error && <p className="image-search-error">{error}</p>}
+      </section>
+
+      {bestMatch ? (
+        <section className="catalog-section image-search-results">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">TOP MATCH</span>
+              <h2>가장 가까운 작품</h2>
+            </div>
+            {result?.candidateCount ? <span className="count-pill">Top {result.candidateCount} 후보 비교</span> : null}
+          </div>
+          <div className="image-search-best">
+            <div className="image-search-match">
+              <span className="similarity-pill">CLIP 후보 {bestMatch.similarity.toFixed(3)}</span>
+              <ArtCard art={bestMatch.artwork} openImage={openImage} />
+            </div>
+            <div className="image-search-explanation">
+              <div className="image-search-explanation-header">
+                <span className="eyebrow">AI COMMENT</span>
+                <div className="image-search-badges">
+                  {result && <span className={`rerank-pill ${result.reranked ? "is-on" : "is-off"}`}>{result.reranked ? "Vision 재랭킹" : "CLIP fallback"}</span>}
+                  {result?.explanation && <span className="confidence-pill">{imageSearchConfidenceLabel(result.explanation.confidence)}</span>}
+                </div>
+              </div>
+              <p className="image-search-summary">
+                {result?.explanation?.summary ?? "비교 코멘트를 생성하는 중 문제가 발생했습니다."}
+              </p>
+              {result?.explanation?.similarParts.length ? (
+                <div className="comparison-list">
+                  <h3>비슷한 점</h3>
+                  <ul>
+                    {result.explanation.similarParts.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {result?.explanation?.differentParts.length ? (
+                <div className="comparison-list">
+                  <h3>다른 점</h3>
+                  <ul>
+                    {result.explanation.differentParts.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {result?.explanation?.caveat && <p className="image-search-caveat">{result.explanation.caveat}</p>}
+            </div>
+          </div>
+        </section>
+      ) : null}
     </section>
   );
 }
@@ -2218,6 +2341,21 @@ function displayArtworkTags(art: Artwork) {
     .filter((tag) => tag !== art.origin)
     .filter((tag) => !importedArtwork || !translatedCategories.includes(tag))
     .slice(0, 4);
+}
+
+function imageSearchErrorMessage(message: string) {
+  if (message.includes("clip_transformers_unavailable")) return "백엔드에 로컬 CLIP 패키지가 설치되지 않았습니다.";
+  if (message.includes("clip_embedding_dimensions")) return "CLIP 모델의 벡터 차원이 DB 설정과 맞지 않습니다.";
+  if (message.includes("image_too_large")) return "이미지는 최대 3MB 정도로 줄여서 다시 시도해주세요.";
+  if (message.includes("image_invalid_type")) return "JPG, PNG, WEBP 이미지만 사용할 수 있습니다.";
+  if (message.includes("artwork_image_download_failed")) return "외부 작품 이미지를 가져오지 못했습니다.";
+  return `이미지 검색에 실패했습니다. ${message}`;
+}
+
+function imageSearchConfidenceLabel(confidence: "high" | "medium" | "low") {
+  if (confidence === "high") return "판단 강함";
+  if (confidence === "low") return "판단 약함";
+  return "판단 보통";
 }
 
 function translateArtworkText(value: string) {

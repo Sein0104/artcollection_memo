@@ -20,6 +20,9 @@ import { AiDocentService } from "./ai-docent/ai-docent.service";
 import { ExternalSearchController } from "./external-search/external-search.controller";
 import { ExternalSearchService } from "./external-search/external-search.service";
 import { AutoModService } from "./auto-mod/auto-mod.service";
+import { ImageSearchController } from "./image-search/image-search.controller";
+import { ImageSearchService } from "./image-search/image-search.service";
+import { ClipImageEmbeddingService } from "./image-search/clip-image-embedding.service";
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true })],
@@ -33,6 +36,7 @@ import { AutoModService } from "./auto-mod/auto-mod.service";
     MissionsController,
     AiDocentController,
     ExternalSearchController,
+    ImageSearchController,
   ],
   providers: [
     PrismaService,
@@ -46,6 +50,8 @@ import { AutoModService } from "./auto-mod/auto-mod.service";
     AiDocentService,
     ExternalSearchService,
     AutoModService,
+    ImageSearchService,
+    ClipImageEmbeddingService,
   ],
 })
 export class AppModule {}

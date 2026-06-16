@@ -3,6 +3,7 @@ import type {
   Artwork,
   DailyMissions,
   ExternalSearchResponse,
+  ImageSearchResponse,
   MissionAnalysis,
   ModerationNotice,
   Museum,
@@ -121,4 +122,9 @@ export const api = {
       body: JSON.stringify({ message }),
     }),
   externalSearch: (query: string) => request<ExternalSearchResponse>(`/external-search?q=${encodeURIComponent(query)}`),
+  searchSimilarImage: (imageDataUrl: string) =>
+    request<ImageSearchResponse>("/image-search/similar", {
+      method: "POST",
+      body: JSON.stringify({ imageDataUrl }),
+    }),
 };

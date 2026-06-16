@@ -74,6 +74,7 @@ model Artwork {
   missionAnalyses         MissionAnalysisRecord[]
   missionAnalysisAttempts MissionAnalysisAttempt[]
   knowledgeEntries        ArtworkKnowledge[]
+  imageEmbeddings         ArtworkImageEmbedding[]
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
 }
@@ -261,6 +262,23 @@ model ArtworkKnowledge {
   @@unique([artworkId, sourceType])
   @@index([artworkId])
   @@index([sourceType])
+}
+
+model ArtworkImageEmbedding {
+  id              String   @id @default(cuid())
+  artworkId       String
+  artwork         Artwork  @relation(fields: [artworkId], references: [id], onDelete: Cascade)
+  image           String
+  model           String
+  dimensions      Int
+  embedding       Json?
+  embeddingVector Unsupported("vector")?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([artworkId, model])
+  @@index([artworkId])
+  @@index([model])
 }
 
 model MissionAnalysisAttempt {

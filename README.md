@@ -30,6 +30,18 @@ Backend: http://127.0.0.1:3001
 AI similarity judging is wired through the React + Nest app only. Use
 `npm run dev` or `start-artcatch.cmd` and open `http://127.0.0.1:5173/#scan`.
 
+Local CLIP image search uses pgvector-backed artwork image embeddings. The
+image-search page retrieves the top CLIP candidates, reranks the strongest
+candidates with `OPENAI_API_KEY` + `OPENAI_VISION_MODEL`, and explains where the
+uploaded image and selected artwork are visually similar or different. After
+running migrations and seeding data, backfill the image vectors once:
+
+```powershell
+cmd /c npm run image-embeddings:backfill -w backend
+```
+
+Then open `http://127.0.0.1:5173/#image-search`.
+
 If PowerShell blocks `npm.ps1`, use the same commands through `cmd /c`:
 
 ```powershell

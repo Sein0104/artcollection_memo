@@ -132,6 +132,33 @@ export type ExternalSearchResponse = {
   message?: string;
 };
 
+export type ImageSearchMatch = {
+  similarity: number;
+  artwork: Artwork;
+};
+
+export type ImageMatchExplanation = {
+  summary: string;
+  similarParts: string[];
+  differentParts: string[];
+  confidence: "high" | "medium" | "low";
+  caveat: string;
+};
+
+export type ImageSearchResponse = {
+  model: string;
+  dimensions: number;
+  artworkCount: number;
+  indexedCount: number;
+  ready: boolean;
+  bestMatch?: ImageSearchMatch | null;
+  explanation?: ImageMatchExplanation | null;
+  candidateCount?: number;
+  rankedArtworkIds?: string[];
+  reranked?: boolean;
+  matches: ImageSearchMatch[];
+};
+
 export type ModerationNotice = {
   action: "allow" | "warn" | "hold" | "report";
   severity: number;
