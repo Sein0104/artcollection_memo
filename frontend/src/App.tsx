@@ -53,7 +53,6 @@ const deletedCommentBody = "삭제된 댓글입니다.";
 type SortMode = "name" | "year";
 type BoardType = "free" | "review";
 type BoardFilter = "all" | BoardType | "popular";
-type MissionMode = "capture" | "pose";
 type DocentChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -519,8 +518,6 @@ function ScanPage({
         openImage={openImage}
       />
 
-      <ScanFooter />
-
       {challengeArt && (
         <MissionChallengeModal
           art={challengeArt}
@@ -595,7 +592,6 @@ function MissionChallengeModal({
 }) {
   const [previewUrl, setPreviewUrl] = useState("");
   const [analysis, setAnalysis] = useState<MissionAnalysis | null>(null);
-  const [missionMode, setMissionMode] = useState<MissionMode>("capture");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
@@ -625,7 +621,7 @@ function MissionChallengeModal({
     setAnalysis(null);
     setIsAnalyzing(true);
     try {
-      setAnalysis(await api.analyzeMission(art.id, imageDataUrl, missionMode));
+      setAnalysis(await api.analyzeMission(art.id, imageDataUrl, "pose"));
     } catch (error) {
       const message = error instanceof Error ? error.message : "ai_failed";
       setAnalysis({
@@ -729,15 +725,7 @@ function MissionChallengeModal({
             작품의 색감, 구도, 분위기와 닮은 사진을 업로드하거나 카메라로 촬영해보세요.
           </p>
         </div>
-        <div className="mission-mode-tabs" aria-label="미션 방식">
-          <button type="button" className={missionMode === "capture" ? "is-active" : ""} onClick={() => setMissionMode("capture")}>
-            작품 촬영
-          </button>
-          <button type="button" className={missionMode === "pose" ? "is-active" : ""} onClick={() => setMissionMode("pose")}>
-            작품 따라하기
-          </button>
-          <p>{missionMode === "pose" ? "사람, 소품, 포즈로 작품의 장면을 재현해도 좋아요." : "실제 장면이나 사물이 작품과 얼마나 닮았는지 봅니다."}</p>
-        </div>
+        <p className="mission-mode-note">사람, 소품, 포즈로 작품의 장면을 자유롭게 따라해보세요.</p>
         <div className="mission-upload-actions">
           <button type="button" className="upload-action" onClick={openFilePicker} disabled={isAnalyzing}>
             이미지 업로드
@@ -750,7 +738,7 @@ function MissionChallengeModal({
             type="button"
             className="mission-limit-help-button"
             aria-expanded={isLimitHelpOpen}
-            aria-label="AI 판정 제한 안내"
+            aria-label="AI 판정 안내"
             onClick={() => setIsLimitHelpOpen((current) => !current)}
           >
             ?
@@ -758,11 +746,9 @@ function MissionChallengeModal({
         </div>
         {isLimitHelpOpen && (
           <div className="mission-limit-help">
-            <strong>AI 판정 제한</strong>
+            <strong>AI 판정 안내</strong>
             <ul>
-              <li>하루 전체 AI 판정은 최대 15회까지 가능해요.</li>
-              <li>같은 작품은 하루 최대 5회까지 판정할 수 있어요.</li>
-              <li>AI 판정은 15초에 한 번만 요청할 수 있어요.</li>
+              <li>AI 유사도 비교 횟수 제한은 없어요.</li>
               <li>이미지는 최대 3MB까지 사용할 수 있어요.</li>
               <li>JPG, JPEG, PNG, WEBP만 지원하고 GIF는 지원하지 않아요.</li>
             </ul>
@@ -937,15 +923,18 @@ function ExternalSearchPanel({
       ) : null}
       {results.length ? (
         <div className="external-search-list">
-          {results.map((result) => (
-            <a className="external-search-item" href={result.url} target="_blank" rel="noreferrer" key={result.url}>
-              <div>
-                <strong>{result.title}</strong>
-                <span>{result.source}</span>
-              </div>
-              {result.snippet ? <p>{result.snippet}</p> : null}
-            </a>
-          ))}
+          {results.map((result) => {
+            const snippet = result.snippet?.replace(/^Content:\s*/i, "");
+            return (
+              <a className="external-search-item" href={result.url} target="_blank" rel="noreferrer" key={result.url}>
+                <div>
+                  <strong>{result.title}</strong>
+                  <span>{result.source}</span>
+                </div>
+                {snippet ? <p>{snippet}</p> : null}
+              </a>
+            );
+          })}
         </div>
       ) : null}
     </section>
@@ -983,10 +972,12 @@ function ScanHero({
     <section className="scan-hero" style={heroStyle}>
       <div className="scan-hero-content">
         <span className="eyebrow">ARTCATCH CURATION</span>
-        <h1>스캔 결과를 하나의 전시처럼 탐색하세요</h1>
-        <p>
-          오늘의 미션 작품을 고르고 사진을 비교하면, 닮은 지점과 수집 흐름을 컬렉션처럼 이어서 볼 수 있어요.
-        </p>
+        <h1>
+          오늘의 작품을 수집하고
+          <br />
+          컬렉션으로 간직하세요
+        </h1>
+        <p>사진을 비교하고 닮은 작품을 전시처럼 탐색해보세요.</p>
         <div className="scan-hero-actions">
           <button disabled={!focusArt} onClick={() => focusArt && onOpenMission(focusArt)}>
             오늘의 스캔 시작
@@ -1167,18 +1158,6 @@ function ScanResultCollectionGrid({
         </div>
       </section>
     </>
-  );
-}
-
-function ScanFooter() {
-  return (
-    <footer className="scan-footer">
-      <strong>ArtCatch</strong>
-      <span>오늘의 스캔, 수집한 작품, 게시판 감상을 하나의 관람 동선으로 이어갑니다.</span>
-      <a className="section-link" href="#community">
-        게시판으로 이동
-      </a>
-    </footer>
   );
 }
 
@@ -1816,6 +1795,7 @@ function CommentItem({
   setReplyTo,
   submitComment,
   deleteComment,
+  depth = 0,
 }: {
   comment: PostComment;
   session: Session;
@@ -1823,12 +1803,14 @@ function CommentItem({
   setReplyTo: (id: string | null) => void;
   submitComment: (event: FormEvent<HTMLFormElement>, parentId?: string) => boolean | void | Promise<boolean | void>;
   deleteComment: (commentId: string) => Promise<void>;
+  depth?: number;
 }) {
   const isDeleted = comment.body === deletedCommentBody;
   const canDelete = !isDeleted && session.user?.nickname === comment.author;
+  const displayDepth = Math.min(depth, 2);
 
   return (
-    <div className="comment-item">
+    <div className={`comment-item ${depth > 0 ? "is-reply" : ""} ${isDeleted ? "is-deleted" : ""}`} data-depth={displayDepth}>
       <div className="comment-body">
         <div className="post-meta">
           <span className="author-chip is-compact">
@@ -1840,20 +1822,24 @@ function CommentItem({
         <p>{comment.body}</p>
         <div className="comment-actions">
           {!isDeleted && (
-            <button className="ghost-button" onClick={() => setReplyTo(replyTo === comment.id ? null : comment.id)}>
-              답글
+            <button className="comment-action-button" onClick={() => setReplyTo(replyTo === comment.id ? null : comment.id)}>
+              {replyTo === comment.id ? "취소" : "답글"}
             </button>
           )}
           {canDelete && (
-            <button className="ghost-button is-danger" onClick={() => void deleteComment(comment.id)}>
+            <button className="comment-action-button is-danger" onClick={() => void deleteComment(comment.id)}>
               삭제
             </button>
           )}
         </div>
       </div>
-      {replyTo === comment.id && <CommentForm onSubmit={(event) => submitComment(event, comment.id)} placeholder="답글을 남겨보세요" />}
+      {replyTo === comment.id && (
+        <div className="comment-reply-form">
+          <CommentForm onSubmit={(event) => submitComment(event, comment.id)} placeholder="답글을 남겨보세요" />
+        </div>
+      )}
       {comment.replies.length > 0 && (
-        <div className="reply-list">
+        <div className="reply-list" data-depth={Math.min(depth + 1, 2)}>
           {comment.replies.map((reply) => (
             <CommentItem
               key={reply.id}
@@ -1863,6 +1849,7 @@ function CommentItem({
               setReplyTo={setReplyTo}
               submitComment={submitComment}
               deleteComment={deleteComment}
+              depth={depth + 1}
             />
           ))}
         </div>
@@ -2208,15 +2195,6 @@ function weeklySelection<T>(items: T[], count: number) {
 function missionAnalysisErrorMessage(message: string) {
   if (message === "openai_api_key_required") {
     return "AI 판정을 쓰려면 백엔드 .env에 OPENAI_API_KEY를 먼저 설정해주세요.";
-  }
-  if (message === "mission_analysis_daily_limit") {
-    return "오늘 AI 판정 횟수를 모두 사용했어요. 내일 다시 도전해주세요.";
-  }
-  if (message === "mission_analysis_artwork_limit") {
-    return "이 작품은 오늘 AI 판정 5회를 모두 사용했어요.";
-  }
-  if (message === "mission_analysis_cooldown") {
-    return "AI 판정은 15초에 한 번만 요청할 수 있어요. 잠시 후 다시 시도해주세요.";
   }
   if (message === "mission_image_too_large") {
     return "이미지가 너무 커요. 더 작은 사진으로 다시 시도해주세요.";

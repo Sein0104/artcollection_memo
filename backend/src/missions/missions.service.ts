@@ -11,9 +11,6 @@ import { AnalyzeMissionDto, CompleteMissionDto } from "./dto";
 
 const MISSION_PASS_THRESHOLD = 62;
 const EMBEDDING_SIMILARITY_THRESHOLD = 0.74;
-const MISSION_ANALYSIS_DAILY_LIMIT = 15;
-const MISSION_ANALYSIS_ARTWORK_DAILY_LIMIT = 5;
-const MISSION_ANALYSIS_COOLDOWN_MS = 15_000;
 const DAILY_MISSION_COUNT = 3;
 const RECENT_MISSION_EXCLUSION_DAYS = 3;
 const MISSION_ROTATION_ANCHOR_DATE_KEY = "2026-01-01";
@@ -24,7 +21,6 @@ const REFERENCE_IMAGE_FETCH_TIMEOUT_MS = 20_000;
 const OPENAI_VISION_TIMEOUT_MS = 60_000;
 const OPENAI_EMBEDDING_TIMEOUT_MS = 20_000;
 const MISSION_IMAGE_DATA_URL_PATTERN = /^data:image\/(png|jpe?g|webp);base64,([a-z0-9+/=]+)$/i;
-const COST_COUNTED_ANALYSIS_STATUSES = ["started", "succeeded", "failed"];
 const MISSION_ANALYSIS_JSON_SCHEMA = {
   type: "object",
   properties: {
@@ -158,10 +154,6 @@ export class MissionsService {
   async analyze(dto: AnalyzeMissionDto, cookieHeader?: string): Promise<MissionAnalysisResult> {
     const user = await this.auth.requireUserFromCookie(cookieHeader);
     await this.assertDailyMission(dto.artworkId);
-    await this.enforceMissionAnalysisLimits({
-      userId: user.id,
-      artworkId: dto.artworkId,
-    });
     await this.assertMissionImageDataUrl({
       userId: user.id,
       artworkId: dto.artworkId,
@@ -179,7 +171,7 @@ export class MissionsService {
     const reference = withLocalArtworkImage(artwork);
     if (!reference.image) throw new BadRequestException("artwork_image_missing");
 
-    const mode = dto.mode ?? "capture";
+    const mode: MissionMode = "pose";
     const attempt = await this.recordMissionAnalysisAttempt({
       userId: user.id,
       artworkId: reference.id,
@@ -307,39 +299,6 @@ export class MissionsService {
       select: { id: true },
     });
     return Boolean(record);
-  }
-
-  private async enforceMissionAnalysisLimits({ userId, artworkId }: { userId: string; artworkId: string }) {
-    const cooldownSince = new Date(Date.now() - MISSION_ANALYSIS_COOLDOWN_MS);
-    const recentAttempt = await this.prisma.missionAnalysisAttempt.findFirst({
-      where: {
-        userId,
-        createdAt: { gte: cooldownSince },
-      },
-      select: { id: true },
-      orderBy: { createdAt: "desc" },
-    });
-    if (recentAttempt) {
-      await this.blockMissionAnalysisAttempt({ userId, artworkId, reason: "mission_analysis_cooldown" });
-    }
-
-    const { start, end } = missionDateRangeForKey(yyyyMmDd());
-    const countedAttemptWhere = {
-      userId,
-      status: { in: COST_COUNTED_ANALYSIS_STATUSES },
-      createdAt: { gte: start, lt: end },
-    };
-    const [dailyCount, artworkCount] = await Promise.all([
-      this.prisma.missionAnalysisAttempt.count({ where: countedAttemptWhere }),
-      this.prisma.missionAnalysisAttempt.count({ where: { ...countedAttemptWhere, artworkId } }),
-    ]);
-
-    if (dailyCount >= MISSION_ANALYSIS_DAILY_LIMIT) {
-      await this.blockMissionAnalysisAttempt({ userId, artworkId, reason: "mission_analysis_daily_limit" });
-    }
-    if (artworkCount >= MISSION_ANALYSIS_ARTWORK_DAILY_LIMIT) {
-      await this.blockMissionAnalysisAttempt({ userId, artworkId, reason: "mission_analysis_artwork_limit" });
-    }
   }
 
   private async assertMissionImageDataUrl({
