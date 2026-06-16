@@ -5,6 +5,7 @@ import { REMOVED_ARTWORK_IDS, withLocalArtworkImage } from "../artworks/image-ov
 import { AuthService } from "../auth/auth.service";
 import { MissionsService } from "../missions/missions.service";
 import { PrismaService } from "../prisma.service";
+import { isPgVectorUnavailable, toPgVectorLiteral } from "../rag/pgvector";
 import { AskDocentDto } from "./dto";
 
 const DOCENT_CONTEXT_LIMIT = 8;
@@ -68,6 +69,25 @@ type KnowledgeCandidate = {
   artwork: ArtworkForKnowledge;
 };
 
+type PgVectorKnowledgeRow = {
+  id: string;
+  artworkId: string;
+  sourceType: string;
+  text: string;
+  artworkTitle: string;
+  artworkArtist: string;
+  artworkYear: string;
+  artworkOrigin: string;
+  artworkPeriod: string;
+  artworkRegion: string;
+  artworkCategory: string[];
+  artworkTags: string[];
+  artworkPalette: number[];
+  artworkImage: string | null;
+  artworkPremium: boolean;
+  artworkCost: number;
+};
+
 type DocentContextItem = {
   key: string;
   text: string;
@@ -97,6 +117,8 @@ type DocentChatResult = {
 export class AiDocentService {
   private knowledgeRefresh?: Promise<void>;
   private readonly answerCache = new Map<string, { expiresAt: number; result: DocentChatResult }>();
+  private pgVectorReadDisabled = false;
+  private pgVectorWriteDisabled = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -206,10 +228,11 @@ export class AiDocentService {
       }
     }
 
+    await this.backfillArtworkKnowledgePgVectors(existing);
     if (!pending.length) return;
 
     const embeddings = await this.createEmbeddings(pending.map((entry) => entry.text));
-    await this.prisma.$transaction(
+    const savedEntries = await this.prisma.$transaction(
       pending.map((entry, index) =>
         this.prisma.artworkKnowledge.upsert({
           where: {
@@ -228,9 +251,11 @@ export class AiDocentService {
             text: entry.text,
             embedding: embeddings[index],
           },
+          select: { id: true },
         }),
       ),
     );
+    await Promise.all(savedEntries.map((entry, index) => this.storeArtworkKnowledgePgVector(entry.id, embeddings[index])));
   }
 
   private knowledgeEntriesForArtwork(artwork: ArtworkForKnowledge) {
@@ -428,6 +453,9 @@ export class AiDocentService {
   }
 
   private async findKnowledgeCandidates(queryEmbedding: number[], artworkIds?: string[]) {
+    const pgVectorCandidates = await this.findKnowledgeCandidatesWithPgVector(queryEmbedding, artworkIds);
+    if (pgVectorCandidates.length) return pgVectorCandidates;
+
     const records = await this.prisma.artworkKnowledge.findMany({
       where: {
         sourceType: { in: [...KNOWLEDGE_SOURCE_TYPES] },
@@ -448,6 +476,115 @@ export class AiDocentService {
       .sort((left, right) => right.similarity - left.similarity)
       .slice(0, DOCENT_CONTEXT_LIMIT)
       .map((item) => item.record);
+  }
+
+  private async findKnowledgeCandidatesWithPgVector(queryEmbedding: number[], artworkIds?: string[]) {
+    if (this.pgVectorReadDisabled) return [];
+
+    const vectorLiteral = toPgVectorLiteral(queryEmbedding);
+    if (!vectorLiteral) return [];
+
+    const sourceList = KNOWLEDGE_SOURCE_TYPES.map((source) => `'${source}'`).join(", ");
+    const params: unknown[] = [vectorLiteral];
+    const artworkFilter = artworkIds?.length
+      ? `AND k."artworkId" IN (${artworkIds
+          .map((_, index) => {
+            params.push(artworkIds[index]);
+            return `$${params.length}`;
+          })
+          .join(", ")})`
+      : "";
+
+    try {
+      const rows = await this.prisma.$queryRawUnsafe<PgVectorKnowledgeRow[]>(
+        `
+          SELECT
+            k."id",
+            k."artworkId",
+            k."sourceType",
+            k."text",
+            a."title" AS "artworkTitle",
+            a."artist" AS "artworkArtist",
+            a."year" AS "artworkYear",
+            a."origin" AS "artworkOrigin",
+            a."period" AS "artworkPeriod",
+            a."region" AS "artworkRegion",
+            a."category" AS "artworkCategory",
+            a."tags" AS "artworkTags",
+            a."palette" AS "artworkPalette",
+            a."image" AS "artworkImage",
+            a."premium" AS "artworkPremium",
+            a."cost" AS "artworkCost"
+          FROM "ArtworkKnowledge" k
+          JOIN "Artwork" a ON a."id" = k."artworkId"
+          WHERE k."sourceType" IN (${sourceList})
+            ${artworkFilter}
+            AND k."embeddingVector" IS NOT NULL
+          ORDER BY k."embeddingVector" <=> $1::vector
+          LIMIT ${DOCENT_CONTEXT_LIMIT}
+        `,
+        ...params,
+      );
+
+      return rows.map((row) => ({
+        id: row.id,
+        artworkId: row.artworkId,
+        sourceType: row.sourceType,
+        text: row.text,
+        embedding: null,
+        artwork: withLocalArtworkImage({
+          id: row.artworkId,
+          title: row.artworkTitle,
+          artist: row.artworkArtist,
+          year: row.artworkYear,
+          origin: row.artworkOrigin,
+          period: row.artworkPeriod,
+          region: row.artworkRegion,
+          category: row.artworkCategory ?? [],
+          tags: row.artworkTags ?? [],
+          palette: row.artworkPalette ?? [],
+          image: row.artworkImage,
+          premium: row.artworkPremium,
+          cost: row.artworkCost,
+        }) as ArtworkForKnowledge,
+      }));
+    } catch (error) {
+      if (isPgVectorUnavailable(error)) {
+        this.pgVectorReadDisabled = true;
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  private async backfillArtworkKnowledgePgVectors(records: Array<{ id: string; embedding: unknown }>) {
+    if (this.pgVectorWriteDisabled) return;
+
+    const writes = records
+      .map((record) => ({ id: record.id, embedding: this.toVector(record.embedding) }))
+      .filter((record): record is { id: string; embedding: number[] } => Boolean(record.embedding));
+    await Promise.all(writes.map((record) => this.storeArtworkKnowledgePgVector(record.id, record.embedding)));
+  }
+
+  private async storeArtworkKnowledgePgVector(id: string, embedding: number[]) {
+    if (this.pgVectorWriteDisabled) return;
+
+    const vectorLiteral = toPgVectorLiteral(embedding);
+    if (!vectorLiteral) return;
+
+    try {
+      await this.prisma.$executeRawUnsafe(
+        `UPDATE "ArtworkKnowledge" SET "embeddingVector" = $1::vector WHERE "id" = $2`,
+        vectorLiteral,
+        id,
+      );
+    } catch (error) {
+      if (isPgVectorUnavailable(error)) {
+        this.pgVectorWriteDisabled = true;
+        return;
+      }
+      throw error;
+    }
   }
 
   private async generateDocentAnswer({
