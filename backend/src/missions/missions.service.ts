@@ -7,6 +7,7 @@ import { addDaysToDateKey, missionDateRangeForKey, yyyyMmDd } from "../common/da
 import { PrismaService } from "../prisma.service";
 import { AuthService } from "../auth/auth.service";
 import { REMOVED_ARTWORK_IDS, withLocalArtworkImage } from "../artworks/image-overrides";
+import { isPgVectorUnavailable, toPgVectorLiteral } from "../rag/pgvector";
 import { AnalyzeMissionDto, CompleteMissionDto } from "./dto";
 
 const MISSION_PASS_THRESHOLD = 62;
@@ -68,8 +69,20 @@ type MissionAnalysisResult = {
   aspects?: Record<string, string>;
 };
 
+type PgVectorCoachRow = {
+  artworkId: string;
+  artworkTitle: string;
+  feedback: string;
+  analysisText: string;
+  passed: boolean;
+  similarity: number;
+};
+
 @Injectable()
 export class MissionsService {
+  private pgVectorReadDisabled = false;
+  private pgVectorWriteDisabled = false;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auth: AuthService,
@@ -442,6 +455,9 @@ export class MissionsService {
   }
 
   private async findCoachTip({ artworkId, mode, embedding }: { artworkId: string; mode: MissionMode; embedding: number[] }) {
+    const pgVectorTip = await this.findCoachTipWithPgVector({ artworkId, mode, embedding });
+    if (pgVectorTip) return pgVectorTip;
+
     try {
       const records = await this.prisma.missionAnalysisRecord.findMany({
         where: { mode },
@@ -474,6 +490,55 @@ export class MissionsService {
     }
   }
 
+  private async findCoachTipWithPgVector({ artworkId, mode, embedding }: { artworkId: string; mode: MissionMode; embedding: number[] }) {
+    if (this.pgVectorReadDisabled) return "";
+
+    const vectorLiteral = toPgVectorLiteral(embedding);
+    if (!vectorLiteral) return "";
+
+    try {
+      const rows = await this.prisma.$queryRawUnsafe<PgVectorCoachRow[]>(
+        `
+          SELECT
+            r."artworkId",
+            a."title" AS "artworkTitle",
+            r."feedback",
+            r."analysisText",
+            r."passed",
+            (1 - (r."embeddingVector" <=> $1::vector) + CASE WHEN r."artworkId" = $2 THEN 0.05 ELSE 0 END) AS "similarity"
+          FROM "MissionAnalysisRecord" r
+          JOIN "Artwork" a ON a."id" = r."artworkId"
+          WHERE r."mode" = $3
+            AND r."embeddingVector" IS NOT NULL
+          ORDER BY r."embeddingVector" <=> $1::vector
+          LIMIT 20
+        `,
+        vectorLiteral,
+        artworkId,
+        mode,
+      );
+      const best = rows
+        .filter((row) => !this.isUnhelpfulCoachRecord(row.feedback, row.analysisText))
+        .map((row) => ({ row, similarity: Number(row.similarity) }))
+        .filter((item) => Number.isFinite(item.similarity) && item.similarity >= EMBEDDING_SIMILARITY_THRESHOLD)
+        .sort((left, right) => right.similarity - left.similarity)[0];
+
+      if (!best) return "";
+
+      const sameArtwork = best.row.artworkId === artworkId;
+      const target = sameArtwork ? "같은 작품" : best.row.artworkTitle;
+      const resultLabel = best.row.passed ? "좋은 점수" : "낮은 점수";
+      const followUp = best.row.passed ? "이번 사진도 그 강점을 살려보세요." : "이번 사진에서는 그 부분을 먼저 조정해보세요.";
+      return `미션 코치: ${target}과 비슷한 ${resultLabel} 기록에서 "${this.trimSentence(best.row.feedback)}"라는 피드백이 있었어요. ${followUp}`;
+    } catch (error) {
+      if (isPgVectorUnavailable(error)) {
+        this.pgVectorReadDisabled = true;
+        return "";
+      }
+      throw error;
+    }
+  }
+
   private async storeMissionAnalysis({
     userId,
     artworkId,
@@ -500,7 +565,32 @@ export class MissionsService {
     if (analysis.aspects) data.aspects = analysis.aspects;
     if (embedding) data.embedding = embedding;
 
-    await this.prisma.missionAnalysisRecord.create({ data: data as any });
+    const record = await this.prisma.missionAnalysisRecord.create({
+      data: data as any,
+      select: { id: true },
+    });
+    if (embedding) await this.storeMissionAnalysisPgVector(record.id, embedding);
+  }
+
+  private async storeMissionAnalysisPgVector(id: string, embedding: number[]) {
+    if (this.pgVectorWriteDisabled) return;
+
+    const vectorLiteral = toPgVectorLiteral(embedding);
+    if (!vectorLiteral) return;
+
+    try {
+      await this.prisma.$executeRawUnsafe(
+        `UPDATE "MissionAnalysisRecord" SET "embeddingVector" = $1::vector WHERE "id" = $2`,
+        vectorLiteral,
+        id,
+      );
+    } catch (error) {
+      if (isPgVectorUnavailable(error)) {
+        this.pgVectorWriteDisabled = true;
+        return;
+      }
+      throw error;
+    }
   }
 
   private toVector(value: unknown) {

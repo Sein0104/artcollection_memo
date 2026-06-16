@@ -41,16 +41,34 @@ type AutoModContext = {
   heldOrReportedCount30d: number;
 };
 
+type AutoModAgentToolName = "rule_check" | "history_check" | "llm_judge" | "decide_action";
+
+type AutoModAgentStep = {
+  step: number;
+  tool: AutoModAgentToolName;
+  status: "completed" | "skipped" | "failed";
+  summary: string;
+  output?: Record<string, unknown>;
+};
+
 type AutoModState = {
   input: AutoModInput;
   normalizedText: string;
   findings: RuleFinding[];
   context: AutoModContext;
   llmDecision?: Partial<AutoModDecision>;
+  steps: AutoModAgentStep[];
 };
 
 const AUTOMOD_TIMEOUT_MS = 20_000;
+const AUTOMOD_MAX_AGENT_STEPS = 4;
 const VALID_ACTIONS = new Set<AutoModAction>(["allow", "warn", "hold", "report"]);
+const AUTOMOD_AGENT_TOOLS: Array<{ name: AutoModAgentToolName; description: string }> = [
+  { name: "rule_check", description: "Run deterministic keyword, spam, privacy, and threat checks." },
+  { name: "history_check", description: "Load recent moderation warnings and held/reported cases for the author." },
+  { name: "llm_judge", description: "Ask the configured LLM for contextual moderation judgment when enabled." },
+  { name: "decide_action", description: "Combine tool outputs into the final moderation action." },
+];
 const HISTORY_RISK_CATEGORIES = [
   "spam",
   "threat",
@@ -91,20 +109,115 @@ export class AutoModService {
       normalizedText: this.normalizeContent(input),
       findings: [],
       context: { warningCount30d: 0, heldOrReportedCount30d: 0 },
+      steps: [],
     };
 
-    this.rulePrecheck(state);
-    state.context = await this.loadContext(input.authorId);
+    return this.runAgentLoop(state);
+  }
 
-    if (input.useLlm !== false && this.shouldUseLlm()) {
-      state.llmDecision = await this.llmContextJudge(state).catch((error) => ({
-        categories: ["llm_unavailable"],
-        reason: error instanceof Error ? error.message : "llm_unavailable",
-        model: this.modelName(),
-      }));
+  private async runAgentLoop(state: AutoModState) {
+    const executedTools = new Set<AutoModAgentToolName>();
+
+    for (let step = 1; step <= AUTOMOD_MAX_AGENT_STEPS; step += 1) {
+      const tool = this.chooseNextAgentTool(executedTools);
+      if (!tool) break;
+      executedTools.add(tool);
+
+      const decision = await this.executeAgentTool(tool, state, step);
+      if (decision) return decision;
     }
 
+    this.addAgentStep(state, {
+      step: state.steps.length + 1,
+      tool: "decide_action",
+      status: "completed",
+      summary: "Fallback decision executed after agent loop ended.",
+    });
     return this.decideAction(state);
+  }
+
+  private chooseNextAgentTool(executedTools: Set<AutoModAgentToolName>) {
+    return AUTOMOD_AGENT_TOOLS.map((tool) => tool.name).find((tool) => !executedTools.has(tool));
+  }
+
+  private async executeAgentTool(tool: AutoModAgentToolName, state: AutoModState, step: number): Promise<AutoModDecision | null> {
+    try {
+      if (tool === "rule_check") {
+        const beforeCount = state.findings.length;
+        this.rulePrecheck(state);
+        this.addAgentStep(state, {
+          step,
+          tool,
+          status: "completed",
+          summary: "Rule precheck completed.",
+          output: { findingsAdded: state.findings.length - beforeCount, findingCount: state.findings.length },
+        });
+        return null;
+      }
+
+      if (tool === "history_check") {
+        state.context = await this.loadContext(state.input.authorId);
+        this.addAgentStep(state, {
+          step,
+          tool,
+          status: "completed",
+          summary: "Author moderation context loaded.",
+          output: state.context,
+        });
+        return null;
+      }
+
+      if (tool === "llm_judge") {
+        if (state.input.useLlm === false || !this.shouldUseLlm()) {
+          this.addAgentStep(state, {
+            step,
+            tool,
+            status: "skipped",
+            summary: "LLM judgment skipped because it is disabled or not configured.",
+            output: { configured: this.shouldUseLlm(), requested: state.input.useLlm !== false },
+          });
+          return null;
+        }
+
+        state.llmDecision = await this.llmContextJudge(state).catch((error) => ({
+          categories: ["llm_unavailable"],
+          reason: error instanceof Error ? error.message : "llm_unavailable",
+          model: this.modelName(),
+        }));
+        this.addAgentStep(state, {
+          step,
+          tool,
+          status: "completed",
+          summary: "LLM contextual judgment completed.",
+          output: {
+            action: state.llmDecision.action,
+            severity: state.llmDecision.severity,
+            categories: state.llmDecision.categories,
+          },
+        });
+        return null;
+      }
+
+      this.addAgentStep(state, {
+        step,
+        tool,
+        status: "completed",
+        summary: "Final moderation decision composed.",
+      });
+      return this.decideAction(state);
+    } catch (error) {
+      this.addAgentStep(state, {
+        step,
+        tool,
+        status: "failed",
+        summary: error instanceof Error ? error.message : "agent_tool_failed",
+      });
+      throw error;
+    }
+  }
+
+  private addAgentStep(state: AutoModState, step: AutoModAgentStep) {
+    state.steps.push(step);
   }
 
   async recordCase({
@@ -432,6 +545,11 @@ export class AutoModService {
       model: this.nonEmptyString(state.llmDecision?.model) || (this.shouldUseLlm() ? this.modelName() : "automod-rules-v1"),
       evidence: {
         graph: ["normalizeContent", "rulePrecheck", "loadContext", "llmContextJudge", "decideAction", "auditLog"],
+        agent: {
+          maxSteps: AUTOMOD_MAX_AGENT_STEPS,
+          availableTools: AUTOMOD_AGENT_TOOLS,
+          steps: state.steps,
+        },
         findings: state.findings,
         context: state.context,
       },

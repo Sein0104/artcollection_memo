@@ -240,6 +240,7 @@ model MissionAnalysisRecord {
   analysisText String
   aspects      Json?
   embedding    Json?
+  embeddingVector Unsupported("vector")?
   createdAt    DateTime @default(now())
 
   @@index([artworkId, mode])
@@ -252,6 +253,7 @@ model ArtworkKnowledge {
   artwork    Artwork  @relation(fields: [artworkId], references: [id], onDelete: Cascade)
   text       String
   embedding  Json?
+  embeddingVector Unsupported("vector")?
   sourceType String
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
