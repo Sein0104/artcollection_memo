@@ -1514,6 +1514,7 @@ function PostWritePage({
   const [boardType, setBoardType] = useState<BoardType>("free");
   const [withoutMuseum, setWithoutMuseum] = useState(false);
   const [isPolicyHelpOpen, setIsPolicyHelpOpen] = useState(false);
+  const isSubmittingRef = useRef(false);
   const visibleMuseums = boardMuseums(museums);
 
   useEffect(() => {
@@ -1524,6 +1525,7 @@ function PostWritePage({
 
   async function createPost(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const formElement = event.currentTarget;
     if (!session.user) {
       window.location.hash = "#login";
       showToast("로그인 후 작성할 수 있어요.");
@@ -1533,15 +1535,40 @@ function PostWritePage({
       showToast("미술관을 선택해주세요.");
       return;
     }
-    const form = new FormData(event.currentTarget);
-    const result = await api.createPost({
-      title: String(form.get("title")),
-      body: String(form.get("body")),
-      museumId: withoutMuseum ? "__none__" : draft.museumId,
-      boardType,
-    });
+    if (isSubmittingRef.current) return;
+
+    const submitButton = formElement.querySelector<HTMLButtonElement>('button[type="submit"]');
+    const submitButtonText = submitButton?.textContent ?? "";
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.textContent = "등록 중";
+    }
+    isSubmittingRef.current = true;
+    const form = new FormData(formElement);
+    const result = await api
+      .createPost({
+        title: String(form.get("title")),
+        body: String(form.get("body")),
+        museumId: withoutMuseum ? "__none__" : draft.museumId,
+        boardType,
+      })
+      .catch(() => {
+        isSubmittingRef.current = false;
+        if (submitButton) {
+          submitButton.disabled = false;
+          submitButton.textContent = submitButtonText;
+        }
+        showToast("게시글을 등록하지 못했습니다.");
+        return null;
+      });
+    if (!result) return;
     setPosts(result.posts);
     if (isModerationBlocked(result.moderation)) {
+      isSubmittingRef.current = false;
+      if (submitButton) {
+        submitButton.disabled = false;
+        submitButton.textContent = submitButtonText;
+      }
       showToast(moderationNoticeMessage(result.moderation));
       return;
     }
