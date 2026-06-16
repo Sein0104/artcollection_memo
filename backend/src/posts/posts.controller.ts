@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import { CreateCommentDto, CreatePostDto, UpdatePostDto, VotePostDto } from "./dto";
 import { PostsService } from "./posts.service";
 
@@ -8,13 +8,24 @@ type RequestWithCookie = {
   };
 };
 
+type ListPostsQuery = {
+  page?: string;
+  limit?: string;
+  q?: string;
+  board?: string;
+  scope?: string;
+  country?: string;
+  area?: string;
+  museumId?: string;
+};
+
 @Controller("posts")
 export class PostsController {
   constructor(private readonly posts: PostsService) {}
 
   @Get()
-  list() {
-    return this.posts.list();
+  list(@Query() query: ListPostsQuery) {
+    return this.posts.list(query);
   }
 
   @Post()

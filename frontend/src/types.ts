@@ -58,6 +58,25 @@ export type PostDetail = Post & {
   comments: PostComment[];
 };
 
+export type PostListMeta = {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasPrev: boolean;
+  hasNext: boolean;
+};
+
+export type PostListResponse = {
+  posts: Post[];
+  page?: number;
+  limit?: number;
+  total?: number;
+  totalPages?: number;
+  hasPrev?: boolean;
+  hasNext?: boolean;
+};
+
 export type UserState = {
   points: number;
   totalEarnedPoints: number;

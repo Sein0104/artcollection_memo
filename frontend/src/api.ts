@@ -8,11 +8,23 @@ import type {
   Museum,
   Post,
   PostDetail,
+  PostListResponse,
   Session,
   UserState,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+
+type PostListParams = {
+  page?: number;
+  limit?: number;
+  q?: string;
+  board?: string;
+  scope?: string;
+  country?: string;
+  area?: string;
+  museumId?: string;
+};
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -47,7 +59,14 @@ export const api = {
   googleStatus: () => request<{ configured: boolean; callbackUrl: string }>("/auth/google/status"),
   artworks: () => request<{ artworks: Artwork[] }>("/artworks"),
   museums: () => request<{ museums: Museum[] }>("/museums"),
-  posts: () => request<{ posts: Post[] }>("/posts"),
+  posts: (params: PostListParams = {}) => {
+    const searchParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") searchParams.set(key, String(value));
+    });
+    const query = searchParams.toString();
+    return request<PostListResponse>(`/posts${query ? `?${query}` : ""}`);
+  },
   post: (id: string) => request<{ post: PostDetail }>(`/posts/${encodeURIComponent(id)}`),
   me: () => request<Session>("/auth/me"),
   state: () => request<Session>("/auth/state"),

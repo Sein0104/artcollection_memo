@@ -19,6 +19,20 @@ const TITLE_STEPS = [
   [0, "새내기 감상가"],
 ] as const;
 
+type ListPostsOptions = {
+  page?: string | number;
+  limit?: string | number;
+  q?: string;
+  board?: string;
+  scope?: string;
+  country?: string;
+  area?: string;
+  museumId?: string;
+};
+
+const DEFAULT_POST_PAGE_SIZE = 8;
+const MAX_POST_PAGE_SIZE = 30;
+
 @Injectable()
 export class PostsService {
   constructor(
@@ -27,9 +41,33 @@ export class PostsService {
     private readonly autoMod: AutoModService,
   ) {}
 
-  async list() {
+  async list(options: ListPostsOptions = {}) {
+    const where = this.postListWhere(options);
+    const pagination = this.paginationFrom(options);
+
+    if (pagination) {
+      const total = await this.prisma.post.count({ where });
+      const posts = await this.prisma.post.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (pagination.page - 1) * pagination.limit,
+        take: pagination.limit,
+        include: { author: true, museum: true, comments: { where: { status: "published" } } },
+      });
+      const totalPages = Math.max(1, Math.ceil(total / pagination.limit));
+      return {
+        posts: posts.map((post) => this.toPostSummary(post)),
+        page: pagination.page,
+        limit: pagination.limit,
+        total,
+        totalPages,
+        hasPrev: pagination.page > 1,
+        hasNext: pagination.page < totalPages,
+      };
+    }
+
     const posts = await this.prisma.post.findMany({
-      where: { status: "published" },
+      where,
       orderBy: { createdAt: "desc" },
       include: { author: true, museum: true, comments: { where: { status: "published" } } },
     });
@@ -265,6 +303,63 @@ export class PostsService {
 
     await this.prisma.post.delete({ where: { id: postId } });
     return this.list();
+  }
+
+  private postListWhere(options: ListPostsOptions) {
+    const conditions: any[] = [{ status: "published" }];
+    const board = this.nonDefaultFilter(options.board);
+    const query = this.nonDefaultFilter(options.q);
+    const scope = this.nonDefaultFilter(options.scope);
+    const country = this.nonDefaultFilter(options.country);
+    const area = this.nonDefaultFilter(options.area);
+    const museumId = this.nonDefaultFilter(options.museumId);
+
+    if (board === "popular") {
+      conditions.push({ upVotes: { gte: 10 } });
+    } else if (board === "free" || board === "review") {
+      conditions.push({ boardType: board });
+    }
+
+    if (query) {
+      conditions.push({
+        OR: [
+          { title: { contains: query, mode: "insensitive" } },
+          { body: { contains: query, mode: "insensitive" } },
+          { museum: { is: { name: { contains: query, mode: "insensitive" } } } },
+        ],
+      });
+    }
+
+    if (museumId) {
+      conditions.push({ museumId });
+    } else {
+      const museumFilters: Record<string, unknown> = {};
+      if (scope) museumFilters.scope = scope;
+      if (country) museumFilters.country = country;
+      if (area) museumFilters.area = area;
+      if (Object.keys(museumFilters).length) conditions.push({ museum: { is: museumFilters } });
+    }
+
+    return conditions.length === 1 ? conditions[0] : { AND: conditions };
+  }
+
+  private paginationFrom(options: ListPostsOptions) {
+    if (options.page === undefined && options.limit === undefined) return null;
+
+    const page = this.clampInt(Number(options.page ?? 1), 1, 100_000);
+    const limit = this.clampInt(Number(options.limit ?? DEFAULT_POST_PAGE_SIZE), 1, MAX_POST_PAGE_SIZE);
+    return { page, limit };
+  }
+
+  private nonDefaultFilter(value: unknown) {
+    if (typeof value !== "string") return "";
+    const trimmed = value.trim();
+    return trimmed && trimmed !== "전체" ? trimmed : "";
+  }
+
+  private clampInt(value: number, min: number, max: number) {
+    if (!Number.isFinite(value)) return min;
+    return Math.max(min, Math.min(max, Math.round(value)));
   }
 
   private async resolveMuseumId(museumId: string) {
