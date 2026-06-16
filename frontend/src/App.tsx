@@ -184,6 +184,8 @@ const boardTypeLabels: Record<BoardType, string> = {
   review: "후기",
 };
 
+const BOARD_POSTS_PER_PAGE = 8;
+
 function moderationNoticeMessage(notice?: ModerationNotice) {
   if (!notice) return "";
   if (notice.action === "warn") return notice.authorMessage || "표현을 조금 부드럽게 다듬어 주세요.";
@@ -209,6 +211,12 @@ function boardMuseums(museums: Museum[]) {
 
 function boardMuseumName(post: Post | PostDetail) {
   return boardHiddenMuseumIds.has(post.museumId) ? "" : post.museumName ?? "";
+}
+
+function pageNumbers(currentPage: number, totalPages: number) {
+  const start = Math.max(1, Math.min(currentPage - 2, totalPages - 4));
+  const end = Math.min(totalPages, start + 4);
+  return Array.from({ length: end - start + 1 }, (_, index) => start + index);
 }
 
 export function App() {
@@ -1165,11 +1173,16 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState({ scope: "전체", country: "전체", area: "전체", museumId: "전체" });
   const [boardFilter, setBoardFilter] = useState<BoardFilter>("all");
+  const [postPage, setPostPage] = useState(1);
   const [externalSearch, setExternalSearch] = useState<ExternalSearchResponse | null>(null);
   const [externalSearchError, setExternalSearchError] = useState("");
   const [isExternalSearching, setIsExternalSearching] = useState(false);
   const normalizedQuery = query.trim();
   const visibleMuseums = boardMuseums(museums);
+
+  useEffect(() => {
+    setPostPage(1);
+  }, [normalizedQuery, boardFilter, search.scope, search.country, search.area, search.museumId]);
 
   useEffect(() => {
     if (normalizedQuery.length < 2) {
@@ -1219,6 +1232,17 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
       (boardFilter === "popular" ? post.upVotes >= 10 : (post.boardType ?? "free") === boardFilter);
     return boardMatch && museumMatch && (!normalizedQuery || text.includes(normalizedQuery.toLowerCase()));
   });
+  const totalPostPages = Math.max(1, Math.ceil(filteredPosts.length / BOARD_POSTS_PER_PAGE));
+  const currentPostPage = Math.min(postPage, totalPostPages);
+  const pagedPosts = filteredPosts.slice(
+    (currentPostPage - 1) * BOARD_POSTS_PER_PAGE,
+    currentPostPage * BOARD_POSTS_PER_PAGE,
+  );
+  const visiblePageNumbers = pageNumbers(currentPostPage, totalPostPages);
+
+  useEffect(() => {
+    if (postPage > totalPostPages) setPostPage(totalPostPages);
+  }, [postPage, totalPostPages]);
 
   return (
     <section className="app-page is-active board-page">
@@ -1246,7 +1270,7 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
         </div>
         <div className="board-list">
           {filteredPosts.length ? (
-            filteredPosts.map((post) => (
+            pagedPosts.map((post) => (
               <a className="board-row" key={post.id} href={`#post/${post.id}`}>
                 <div className="board-row-main">
                   <div className="board-row-title">
@@ -1271,6 +1295,37 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
             <div className="board-empty">조건에 맞는 게시글이 없습니다.</div>
           )}
         </div>
+        {filteredPosts.length ? (
+          <div className="board-pagination" aria-label="게시글 페이지 이동">
+            <span>
+              총 {filteredPosts.length}개 중 {(currentPostPage - 1) * BOARD_POSTS_PER_PAGE + 1}-
+              {Math.min(currentPostPage * BOARD_POSTS_PER_PAGE, filteredPosts.length)}개
+            </span>
+            <div>
+              <button type="button" disabled={currentPostPage === 1} onClick={() => setPostPage((page) => Math.max(1, page - 1))}>
+                이전
+              </button>
+              {visiblePageNumbers.map((page) => (
+                <button
+                  type="button"
+                  key={page}
+                  className={page === currentPostPage ? "is-active" : ""}
+                  aria-current={page === currentPostPage ? "page" : undefined}
+                  onClick={() => setPostPage(page)}
+                >
+                  {page}
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled={currentPostPage === totalPostPages}
+                onClick={() => setPostPage((page) => Math.min(totalPostPages, page + 1))}
+              >
+                다음
+              </button>
+            </div>
+          </div>
+        ) : null}
         {normalizedQuery.length >= 2 ? (
           <ExternalSearchPanel
             query={normalizedQuery}
