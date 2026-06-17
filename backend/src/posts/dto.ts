@@ -6,7 +6,7 @@ export class CreatePostDto {
   title!: string;
 
   @IsString()
-  @Length(1, 240)
+  @Length(1, 8000)
   body!: string;
 
   @IsString()
@@ -38,6 +38,6 @@ export class UpdatePostDto {
   title!: string;
 
   @IsString()
-  @Length(1, 240)
+  @Length(1, 1200)
   body!: string;
 }

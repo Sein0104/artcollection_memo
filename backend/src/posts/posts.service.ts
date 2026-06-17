@@ -7,6 +7,7 @@ import { CreateCommentDto, CreatePostDto, UpdatePostDto, VotePostDto } from "./d
 
 const GENERAL_POST_MUSEUM_ID = "general-post";
 const DELETED_COMMENT_BODY = "삭제된 댓글입니다.";
+const IMAGE_SHARE_MARKER_PATTERN = /\n?\[\[ARTCATCH_IMAGE_SHARE:[A-Za-z0-9+/=]+\]\]\s*$/;
 const TITLE_STEPS = [
   [4000, "마스터 큐레이터"],
   [3000, "컬렉션 디렉터"],
@@ -98,12 +99,13 @@ export class PostsService {
     const museumId = await this.resolveMuseumId(dto.museumId);
     const title = dto.title.trim();
     const body = dto.body.trim();
-    if (!title || !body) throw new BadRequestException("post_content_required");
+    const visibleBody = this.visiblePostBody(body);
+    if (!title || !visibleBody) throw new BadRequestException("post_content_required");
     const moderation = await this.autoMod.review({
       targetType: "post",
       authorId: user.id,
       title,
-      body,
+      body: visibleBody,
     });
     if (this.autoMod.isBlockingAction(moderation.action)) {
       await this.autoMod.recordCase({
@@ -253,12 +255,13 @@ export class PostsService {
 
     const title = dto.title.trim();
     const body = dto.body.trim();
-    if (!title || !body) throw new BadRequestException("post_content_required");
+    const visibleBody = this.visiblePostBody(body);
+    if (!title || !visibleBody) throw new BadRequestException("post_content_required");
     const moderation = await this.autoMod.review({
       targetType: "post",
       authorId: user.id,
       title,
-      body,
+      body: visibleBody,
       postId,
     });
     if (this.autoMod.isBlockingAction(moderation.action)) {
@@ -354,6 +357,10 @@ export class PostsService {
     if (typeof value !== "string") return "";
     const trimmed = value.trim();
     return trimmed && trimmed !== "전체" ? trimmed : "";
+  }
+
+  private visiblePostBody(body: string) {
+    return body.replace(IMAGE_SHARE_MARKER_PATTERN, "").trim();
   }
 
   private clampInt(value: number, min: number, max: number) {

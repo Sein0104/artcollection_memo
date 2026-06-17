@@ -5,7 +5,9 @@ import type {
   AiDocentSource,
   Artwork,
   DailyMissions,
+  ExternalSearchResult,
   ExternalSearchResponse,
+  ImageSearchMatch,
   ImageSearchResponse,
   MissionAnalysis,
   ModerationNotice,
@@ -61,6 +63,23 @@ type DocentChatMessage = {
   text: string;
   suggestedArtworks?: Artwork[];
   sources?: AiDocentSource[];
+};
+
+type ImageShareMetadata = {
+  kind: "image-search-share";
+  artwork: Artwork;
+  similarity: number;
+  explanation?: ImageSearchResponse["explanation"];
+  sources: ExternalSearchResult[];
+  sourceQuery: string;
+};
+
+type ImageShareDraft = {
+  title: string;
+  body: string;
+  boardType: BoardType;
+  withoutMuseum: boolean;
+  metadata: ImageShareMetadata;
 };
 
 const docentQuickPrompts = [
@@ -187,6 +206,9 @@ const boardTypeLabels: Record<BoardType, string> = {
 };
 
 const BOARD_POSTS_PER_PAGE = 8;
+const IMAGE_SHARE_DRAFT_KEY = "artcatch:image-search-share-draft";
+const IMAGE_SHARE_MARKER_PREFIX = "[[ARTCATCH_IMAGE_SHARE:";
+const IMAGE_SHARE_MARKER_SUFFIX = "]]";
 
 function moderationNoticeMessage(notice?: ModerationNotice) {
   if (!notice) return "";
@@ -410,7 +432,7 @@ export function App() {
         {route === "community" && <CommunityPage museums={museums} posts={posts} />}
         {route === "docent" && <AiDocentPage session={session} openImage={setSelectedImage} showToast={showToast} />}
         {route === "write" && <PostWritePage museums={museums} session={session} setPosts={setPosts} showToast={showToast} />}
-        {postId && <PostDetailPage postId={postId} session={session} setPosts={setPosts} showToast={showToast} />}
+        {postId && <PostDetailPage postId={postId} session={session} setPosts={setPosts} showToast={showToast} openImage={setSelectedImage} />}
         {route === "login" && <AuthPage />}
       </main>
 
@@ -602,6 +624,7 @@ function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
   const [researchResponse, setResearchResponse] = useState<ExternalSearchResponse | null>(null);
   const [researchError, setResearchError] = useState("");
   const [isResearching, setIsResearching] = useState(false);
+  const [isSharingToBoard, setIsSharingToBoard] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const bestMatch = result?.bestMatch ?? result?.matches[0] ?? null;
 
@@ -622,6 +645,7 @@ function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
     setResearchResponse(null);
     setResearchError("");
     setIsResearching(false);
+    setIsSharingToBoard(false);
     try {
       const imageDataUrl = await imageFileToMissionDataUrl(file);
       setPreviewUrl(imageDataUrl);
@@ -641,18 +665,41 @@ function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
   async function loadArtworkResearch() {
     if (!bestMatch || isResearching) return;
 
-    const query = artworkResearchQuery(bestMatch.artwork);
+    await fetchArtworkResearch(bestMatch.artwork);
+  }
+
+  async function fetchArtworkResearch(artwork: Artwork) {
+    const query = artworkResearchQuery(artwork);
     setResearchQuery(query);
     setResearchResponse(null);
     setResearchError("");
     setIsResearching(true);
     try {
-      setResearchResponse(await api.externalSearch(query));
+      const response = await api.externalSearch(query);
+      setResearchResponse(response);
+      return response;
     } catch (researchError) {
       setResearchError(researchError instanceof Error ? researchError.message : "external_search_failed");
+      return null;
     } finally {
       setIsResearching(false);
     }
+  }
+
+  async function shareToBoard() {
+    if (!bestMatch || isSharingToBoard) return;
+
+    setIsSharingToBoard(true);
+    const response = researchResponse ?? (await fetchArtworkResearch(bestMatch.artwork));
+    const draft = imageSearchShareDraft({
+      match: bestMatch,
+      explanation: result?.explanation,
+      sources: response?.results ?? [],
+      sourceQuery: response?.query ?? artworkResearchQuery(bestMatch.artwork),
+    });
+    window.localStorage.setItem(IMAGE_SHARE_DRAFT_KEY, JSON.stringify(draft));
+    window.location.hash = "#write";
+    setIsSharingToBoard(false);
   }
 
   return (
@@ -733,6 +780,9 @@ function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
               <div className="image-search-research-actions">
                 <button type="button" className="research-button" onClick={() => void loadArtworkResearch()} disabled={isResearching}>
                   {isResearching ? "자료 검색 중" : "작품 자료 찾기"}
+                </button>
+                <button type="button" className="share-board-button" onClick={() => void shareToBoard()} disabled={isSharingToBoard}>
+                  {isSharingToBoard ? "공유 준비 중" : "게시판에 공유"}
                 </button>
               </div>
             </div>
@@ -1431,7 +1481,8 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
   }, [normalizedQuery]);
 
   const filteredPosts = posts.filter((post) => {
-    const text = `${post.title} ${post.body} ${boardMuseumName(post)}`.toLowerCase();
+    const visibleBody = parseImageSharePostBody(post.body).text;
+    const text = `${post.title} ${visibleBody} ${boardMuseumName(post)}`.toLowerCase();
     const museum = visibleMuseums.find((item) => item.id === post.museumId);
     const museumMatch =
       (search.scope === "전체" || museum?.scope === search.scope) &&
@@ -1489,7 +1540,7 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
                     <span>{boardTypeLabels[(post.boardType ?? "free") as BoardType]}</span>
                     {boardMuseumName(post) && <span>{boardMuseumName(post)}</span>}
                   </div>
-                  <p>{post.body}</p>
+                  <p>{parseImageSharePostBody(post.body).text}</p>
                   <div className="post-meta">
                     <span>{post.author}</span>
                     <span>{new Date(post.createdAt).toLocaleString("ko-KR")}</span>
@@ -1724,9 +1775,29 @@ function PostWritePage({
   const [draft, setDraft] = useState({ scope: "", country: "", area: "", museumId: "" });
   const [boardType, setBoardType] = useState<BoardType>("free");
   const [withoutMuseum, setWithoutMuseum] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [bodyDraft, setBodyDraft] = useState("");
+  const [shareMetadata, setShareMetadata] = useState<ImageShareMetadata | null>(null);
   const [isPolicyHelpOpen, setIsPolicyHelpOpen] = useState(false);
   const isSubmittingRef = useRef(false);
   const visibleMuseums = boardMuseums(museums);
+
+  useEffect(() => {
+    const rawDraft = window.localStorage.getItem(IMAGE_SHARE_DRAFT_KEY);
+    if (!rawDraft) return;
+
+    window.localStorage.removeItem(IMAGE_SHARE_DRAFT_KEY);
+    try {
+      const parsed = JSON.parse(rawDraft) as ImageShareDraft;
+      setTitleDraft(parsed.title || "");
+      setBodyDraft(parsed.body || "");
+      setBoardType(parsed.boardType === "review" ? "review" : "free");
+      setWithoutMuseum(Boolean(parsed.withoutMuseum));
+      setShareMetadata(parsed.metadata ?? null);
+    } catch {
+      setShareMetadata(null);
+    }
+  }, []);
 
   useEffect(() => {
     if (withoutMuseum || !visibleMuseums.length || draft.museumId) return;
@@ -1756,10 +1827,12 @@ function PostWritePage({
     }
     isSubmittingRef.current = true;
     const form = new FormData(formElement);
+    const title = String(form.get("title")).trim();
+    const body = String(form.get("body")).trim();
     const result = await api
       .createPost({
-        title: String(form.get("title")),
-        body: String(form.get("body")),
+        title,
+        body: appendImageShareMetadata(body, shareMetadata),
         museumId: withoutMuseum ? "__none__" : draft.museumId,
         boardType,
       })
@@ -1783,6 +1856,7 @@ function PostWritePage({
       showToast(moderationNoticeMessage(result.moderation));
       return;
     }
+    setShareMetadata(null);
     window.location.hash = "#community";
     showToast(moderationNoticeMessage(result.moderation) || "게시글을 등록했습니다.");
   }
@@ -1817,8 +1891,23 @@ function PostWritePage({
             후기게시판
           </button>
         </div>
-        <input name="title" maxLength={36} placeholder="게시글 제목" required />
-        <textarea name="body" maxLength={240} rows={7} placeholder="미술관이나 작품에 대한 생각" required />
+        {shareMetadata && (
+          <div className="share-draft-notice">
+            <span className="eyebrow">IMAGE SEARCH SHARE</span>
+            <strong>{displayArtworkTitle(shareMetadata.artwork)} 결과가 자동으로 채워졌습니다.</strong>
+            <p>상단의 내 의견 부분만 더해도 게시글을 등록할 수 있어요.</p>
+          </div>
+        )}
+        <input name="title" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} maxLength={36} placeholder="게시글 제목" required />
+        <textarea
+          name="body"
+          value={bodyDraft}
+          onChange={(event) => setBodyDraft(event.target.value)}
+          maxLength={1200}
+          rows={8}
+          placeholder="미술관이나 작품에 대한 생각"
+          required
+        />
         <label className="write-option">
           <input
             type="checkbox"
@@ -1841,11 +1930,13 @@ function PostDetailPage({
   session,
   setPosts,
   showToast,
+  openImage,
 }: {
   postId: string;
   session: Session;
   setPosts: (posts: Post[]) => void;
   showToast: (message: string) => void;
+  openImage: (art: Artwork) => void;
 }) {
   const [post, setPost] = useState<PostDetail | null>(null);
   const [replyTo, setReplyTo] = useState<string | null>(null);
@@ -1937,7 +2028,7 @@ function PostDetailPage({
   function startEditing() {
     if (!post) return;
     setEditTitle(post.title);
-    setEditBody(post.body);
+    setEditBody(parseImageSharePostBody(post.body).text);
     setIsEditing(true);
   }
 
@@ -1975,6 +2066,7 @@ function PostDetailPage({
       </section>
     );
   }
+  const parsedPostBody = parseImageSharePostBody(post.body);
 
   return (
     <section className="app-page is-active post-detail-page">
@@ -2023,7 +2115,7 @@ function PostDetailPage({
             </div>
             {isEditPolicyHelpOpen && <ModerationPolicyGuide compact />}
             <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} maxLength={36} required />
-            <textarea value={editBody} onChange={(event) => setEditBody(event.target.value)} maxLength={240} rows={6} required />
+            <textarea value={editBody} onChange={(event) => setEditBody(event.target.value)} maxLength={1200} rows={6} required />
             <div className="post-edit-actions">
               <button type="button" className="ghost-button" onClick={() => setIsEditing(false)}>
                 취소
@@ -2034,7 +2126,8 @@ function PostDetailPage({
         ) : (
           <>
             <h1>{post.title}</h1>
-            <p>{post.body}</p>
+            <p>{parsedPostBody.text}</p>
+            {parsedPostBody.metadata && <SharedImageSearchAttachment metadata={parsedPostBody.metadata} openImage={openImage} />}
             <div className="vote-row">
               <button onClick={() => vote("up")}>추천 {post.upVotes}</button>
               <button className="ghost-button" onClick={() => vote("down")}>
@@ -2077,6 +2170,72 @@ function PostDetailPage({
         </div>
       </section>
       {isCommentPolicyOpen && <ModerationPolicyModal onClose={() => setIsCommentPolicyOpen(false)} />}
+    </section>
+  );
+}
+
+function SharedImageSearchAttachment({ metadata, openImage }: { metadata: ImageShareMetadata; openImage: (art: Artwork) => void }) {
+  const art = metadata.artwork;
+  const sources = metadata.sources ?? [];
+
+  return (
+    <section className="shared-image-attachment">
+      <div className="shared-image-header">
+        <div>
+          <span className="eyebrow">IMAGE SEARCH RESULT</span>
+          <h2>매칭된 작품</h2>
+        </div>
+        <span>CLIP {metadata.similarity.toFixed(3)}</span>
+      </div>
+      <div className="shared-image-body">
+        <button className="shared-artwork-card" type="button" onClick={() => openImage(art)}>
+          <img
+            src={art.image || placeholder(art)}
+            alt={displayArtworkTitle(art)}
+            onError={(event) => {
+              event.currentTarget.onerror = null;
+              event.currentTarget.src = placeholder(art);
+            }}
+          />
+          <span>
+            <strong>{displayArtworkTitle(art)}</strong>
+            <em>
+              {art.artist} · {art.year}
+            </em>
+          </span>
+        </button>
+        <div className="shared-image-notes">
+          {metadata.explanation?.summary && <p>{metadata.explanation.summary}</p>}
+          {metadata.explanation?.similarParts?.length ? (
+            <div>
+              <strong>비슷한 점</strong>
+              <ul>
+                {metadata.explanation.similarParts.slice(0, 3).map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div className="shared-source-section">
+        <div className="shared-source-header">
+          <span className="eyebrow">MCP SOURCES</span>
+          <span>{metadata.sourceQuery}</span>
+        </div>
+        {sources.length ? (
+          <div className="shared-source-list">
+            {sources.map((source) => (
+              <a href={source.url} target="_blank" rel="noreferrer" key={source.url}>
+                <strong>{source.title}</strong>
+                <span>{source.source}</span>
+              </a>
+            ))}
+          </div>
+        ) : (
+          <p className="shared-source-empty">공유 시점에 저장된 MCP 출처 링크가 없습니다.</p>
+        )}
+      </div>
     </section>
   );
 }
@@ -2447,6 +2606,93 @@ function imageSearchConfidenceLabel(confidence: "high" | "medium" | "low") {
 
 function artworkResearchQuery(art: Artwork) {
   return [displayArtworkTitle(art), art.artist, "official museum collection artwork analysis"].filter(Boolean).join(" ");
+}
+
+function imageSearchShareDraft({
+  match,
+  explanation,
+  sources,
+  sourceQuery,
+}: {
+  match: ImageSearchMatch;
+  explanation: ImageSearchResponse["explanation"];
+  sources: ExternalSearchResult[];
+  sourceQuery: string;
+}): ImageShareDraft {
+  const title = truncateText(`내 사진이 ${displayArtworkTitle(match.artwork)}랑 닮았나요?`, 36);
+  const metadata: ImageShareMetadata = {
+    kind: "image-search-share",
+    artwork: match.artwork,
+    similarity: match.similarity,
+    explanation,
+    sources: sources.slice(0, 5),
+    sourceQuery,
+  };
+  return {
+    title,
+    body: imageSearchShareBody(match, explanation),
+    boardType: "review",
+    withoutMuseum: true,
+    metadata,
+  };
+}
+
+function imageSearchShareBody(match: ImageSearchMatch, explanation: ImageSearchResponse["explanation"]) {
+  const similar = explanation?.similarParts?.slice(0, 2).join(" / ") || "AI가 색감, 구도, 분위기를 기준으로 비슷한 부분을 찾았습니다.";
+  const different = explanation?.differentParts?.slice(0, 2).join(" / ") || "세부 피사체나 배경은 다를 수 있습니다.";
+  return [
+    "내 의견: ",
+    "",
+    `${displayArtworkTitle(match.artwork)} 매칭 결과를 공유합니다.`,
+    explanation?.summary ? `AI 요약: ${explanation.summary}` : "",
+    `비슷한 점: ${similar}`,
+    `다른 점: ${different}`,
+    "",
+    "MCP 외부 자료는 게시글 상세에서 확인할 수 있어요.",
+  ]
+    .filter((line, index) => index < 2 || line)
+    .join("\n");
+}
+
+function appendImageShareMetadata(body: string, metadata: ImageShareMetadata | null) {
+  if (!metadata) return body;
+  return `${body.trim()}\n\n${IMAGE_SHARE_MARKER_PREFIX}${encodeShareMetadata(metadata)}${IMAGE_SHARE_MARKER_SUFFIX}`;
+}
+
+function parseImageSharePostBody(body: string) {
+  const start = body.lastIndexOf(IMAGE_SHARE_MARKER_PREFIX);
+  if (start < 0) return { text: body, metadata: null as ImageShareMetadata | null };
+  const end = body.indexOf(IMAGE_SHARE_MARKER_SUFFIX, start + IMAGE_SHARE_MARKER_PREFIX.length);
+  if (end < 0) return { text: body, metadata: null as ImageShareMetadata | null };
+
+  const encoded = body.slice(start + IMAGE_SHARE_MARKER_PREFIX.length, end);
+  const text = body.slice(0, start).trim();
+  try {
+    const metadata = JSON.parse(decodeShareMetadata(encoded)) as ImageShareMetadata;
+    if (metadata?.kind !== "image-search-share" || !metadata.artwork?.id) throw new Error("invalid_share_metadata");
+    return { text, metadata };
+  } catch {
+    return { text: body, metadata: null as ImageShareMetadata | null };
+  }
+}
+
+function encodeShareMetadata(metadata: ImageShareMetadata) {
+  const bytes = new TextEncoder().encode(JSON.stringify(metadata));
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+function decodeShareMetadata(value: string) {
+  const binary = atob(value);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function truncateText(value: string, maxLength: number) {
+  return value.length > maxLength ? `${value.slice(0, Math.max(0, maxLength - 1))}…` : value;
 }
 
 function translateArtworkText(value: string) {
