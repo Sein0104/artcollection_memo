@@ -19,9 +19,8 @@ const IMAGE_MATCH_RERANK_JSON_SCHEMA = {
     similarParts: { type: "array", items: { type: "string" } },
     differentParts: { type: "array", items: { type: "string" } },
     confidence: { type: "string", enum: ["high", "medium", "low"] },
-    caveat: { type: "string" },
   },
-  required: ["selectedArtworkId", "rankedArtworkIds", "summary", "similarParts", "differentParts", "confidence", "caveat"],
+  required: ["selectedArtworkId", "rankedArtworkIds", "summary", "similarParts", "differentParts", "confidence"],
   additionalProperties: false,
 };
 
@@ -77,7 +76,6 @@ type ImageMatchExplanation = {
   similarParts: string[];
   differentParts: string[];
   confidence: "high" | "medium" | "low";
-  caveat: string;
 };
 
 type ImageMatchRerankResult = ImageMatchExplanation & {
@@ -157,7 +155,7 @@ export class ImageSearchService {
         rankedArtworkIds: result.rankedArtworkIds,
         reranked: selected.artwork.id !== fallback.artwork.id || result.rankedArtworkIds.length > 0,
       };
-    } catch (error) {
+    } catch {
       return {
         bestMatch: fallback,
         explanation: {
@@ -165,7 +163,6 @@ export class ImageSearchService {
           similarParts: [],
           differentParts: [],
           confidence: "low" as const,
-          caveat: this.safeErrorMessage(error),
         },
         rankedArtworkIds: [fallback.artwork.id],
         reranked: false,
@@ -194,7 +191,6 @@ export class ImageSearchService {
       "summary: one short Korean paragraph explaining why the selected artwork won.",
       "similarParts: 2-4 concrete visual similarities between the user photo and the selected artwork.",
       "differentParts: 2-4 concrete visual differences. Be honest if the selected match is only loosely related.",
-      "caveat: return an empty string.",
       "",
       "Candidates:",
       candidates
@@ -515,7 +511,6 @@ export class ImageSearchService {
       similarParts: result.similarParts,
       differentParts: result.differentParts,
       confidence: result.confidence,
-      caveat: result.caveat,
     };
   }
 
@@ -526,7 +521,6 @@ export class ImageSearchService {
       similarParts: this.stringArray(parsed.similarParts, ["색감, 구도, 분위기 중 일부가 비슷하게 감지되었습니다."]),
       differentParts: this.stringArray(parsed.differentParts, ["세부 피사체나 배경은 다를 수 있습니다."]),
       confidence,
-      caveat: this.stringValue(parsed.caveat),
     };
   }
 
@@ -543,11 +537,6 @@ export class ImageSearchService {
 
   private uniqueStrings(values: string[]) {
     return Array.from(new Set(values));
-  }
-
-  private safeErrorMessage(error: unknown) {
-    if (error instanceof Error && error.message) return error.message;
-    return "image_match_explanation_failed";
   }
 
   private countFromRows(rows: CountRow[]) {

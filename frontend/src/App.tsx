@@ -2816,13 +2816,6 @@ function aiDocentErrorMessage(message: string) {
   return `AI 도우미가 답변하지 못했습니다. ${message}`;
 }
 
-function docentSourceLabel(type: AiDocentSource["type"]) {
-  if (type === "daily_mission") return "오늘 미션";
-  if (type === "user_collection") return "컬렉션";
-  if (type === "museum") return "출처";
-  return "작품 지식";
-}
-
 async function imageFileToMissionDataUrl(file: File) {
   if (!file.type.startsWith("image/")) return readFileAsDataUrl(file);
 

@@ -142,7 +142,6 @@ export type ImageMatchExplanation = {
   similarParts: string[];
   differentParts: string[];
   confidence: "high" | "medium" | "low";
-  caveat: string;
 };
 
 export type ImageSearchResponse = {

@@ -571,8 +571,7 @@ main {
 }
 
 .comparison-list h3,
-.comparison-list ul,
-.image-search-caveat {
+.comparison-list ul {
   margin: 0;
 }
 
@@ -587,14 +586,6 @@ main {
   padding-left: 20px;
   color: var(--muted);
   line-height: 1.58;
-}
-
-.image-search-caveat {
-  border-top: 1px solid var(--line);
-  padding-top: 12px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.55;
 }
 
 .image-search-research-actions {
