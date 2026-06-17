@@ -194,7 +194,7 @@ export class ImageSearchService {
       "summary: one short Korean paragraph explaining why the selected artwork won.",
       "similarParts: 2-4 concrete visual similarities between the user photo and the selected artwork.",
       "differentParts: 2-4 concrete visual differences. Be honest if the selected match is only loosely related.",
-      "caveat: one short Korean sentence explaining that this is CLIP retrieval reranked by a vision model, not objective proof.",
+      "caveat: return an empty string.",
       "",
       "Candidates:",
       candidates
@@ -526,9 +526,7 @@ export class ImageSearchService {
       similarParts: this.stringArray(parsed.similarParts, ["색감, 구도, 분위기 중 일부가 비슷하게 감지되었습니다."]),
       differentParts: this.stringArray(parsed.differentParts, ["세부 피사체나 배경은 다를 수 있습니다."]),
       confidence,
-      caveat:
-        this.stringValue(parsed.caveat) ||
-        "이 평가는 이미지 검색 결과와 Vision 모델 해석을 결합한 참고용 판단입니다.",
+      caveat: this.stringValue(parsed.caveat),
     };
   }
 

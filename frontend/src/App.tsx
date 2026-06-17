@@ -72,6 +72,10 @@ type ImageShareMetadata = {
   explanation?: ImageSearchResponse["explanation"];
   sources: ExternalSearchResult[];
   sourceQuery: string;
+  uploadedImage?: {
+    dataUrl: string;
+    caption: string;
+  };
 };
 
 type ImageShareDraft = {
@@ -209,6 +213,8 @@ const BOARD_POSTS_PER_PAGE = 8;
 const IMAGE_SHARE_DRAFT_KEY = "artcatch:image-search-share-draft";
 const IMAGE_SHARE_MARKER_PREFIX = "[[ARTCATCH_IMAGE_SHARE:";
 const IMAGE_SHARE_MARKER_SUFFIX = "]]";
+const IMAGE_SHARE_PREVIEW_MAX_SIZE = 420;
+const IMAGE_SHARE_PREVIEW_MAX_CHARS = 45_000;
 
 function moderationNoticeMessage(notice?: ModerationNotice) {
   if (!notice) return "";
@@ -617,6 +623,7 @@ function ArtworksPage({
 
 function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
   const [previewUrl, setPreviewUrl] = useState("");
+  const [sharePreviewUrl, setSharePreviewUrl] = useState("");
   const [result, setResult] = useState<ImageSearchResponse | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState("");
@@ -646,9 +653,11 @@ function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
     setResearchError("");
     setIsResearching(false);
     setIsSharingToBoard(false);
+    setSharePreviewUrl("");
     try {
       const imageDataUrl = await imageFileToMissionDataUrl(file);
       setPreviewUrl(imageDataUrl);
+      setSharePreviewUrl(await imageDataUrlToSharePreviewDataUrl(imageDataUrl).catch(() => ""));
       const response = await api.searchSimilarImage(imageDataUrl);
       setResult(response);
       if (!response.bestMatch && !response.matches.length) {
@@ -690,16 +699,22 @@ function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
     if (!bestMatch || isSharingToBoard) return;
 
     setIsSharingToBoard(true);
-    const response = researchResponse ?? (await fetchArtworkResearch(bestMatch.artwork));
-    const draft = imageSearchShareDraft({
-      match: bestMatch,
-      explanation: result?.explanation,
-      sources: response?.results ?? [],
-      sourceQuery: response?.query ?? artworkResearchQuery(bestMatch.artwork),
-    });
-    window.localStorage.setItem(IMAGE_SHARE_DRAFT_KEY, JSON.stringify(draft));
-    window.location.hash = "#write";
-    setIsSharingToBoard(false);
+    try {
+      const response = researchResponse ?? (await fetchArtworkResearch(bestMatch.artwork));
+      const draft = imageSearchShareDraft({
+        match: bestMatch,
+        explanation: result?.explanation,
+        sources: response?.results ?? [],
+        sourceQuery: response?.query ?? artworkResearchQuery(bestMatch.artwork),
+        uploadedImageDataUrl: sharePreviewUrl,
+      });
+      window.localStorage.setItem(IMAGE_SHARE_DRAFT_KEY, JSON.stringify(draft));
+      window.location.hash = "#write";
+    } catch {
+      setError("업로드 사진을 포함한 공유 글을 준비하지 못했습니다. 사진을 조금 줄여 다시 시도해주세요.");
+    } finally {
+      setIsSharingToBoard(false);
+    }
   }
 
   return (
@@ -776,7 +791,6 @@ function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
                   </ul>
                 </div>
               ) : null}
-              {result?.explanation?.caveat && <p className="image-search-caveat">{result.explanation.caveat}</p>}
               <div className="image-search-research-actions">
                 <button type="button" className="research-button" onClick={() => void loadArtworkResearch()} disabled={isResearching}>
                   {isResearching ? "자료 검색 중" : "작품 자료 찾기"}
@@ -1893,9 +1907,12 @@ function PostWritePage({
         </div>
         {shareMetadata && (
           <div className="share-draft-notice">
-            <span className="eyebrow">IMAGE SEARCH SHARE</span>
-            <strong>{displayArtworkTitle(shareMetadata.artwork)} 결과가 자동으로 채워졌습니다.</strong>
-            <p>상단의 내 의견 부분만 더해도 게시글을 등록할 수 있어요.</p>
+            {shareMetadata.uploadedImage?.dataUrl && <img src={shareMetadata.uploadedImage.dataUrl} alt="게시글에 함께 공유될 업로드 사진" />}
+            <span>
+              <span className="eyebrow">IMAGE SEARCH SHARE</span>
+              <strong>{displayArtworkTitle(shareMetadata.artwork)} 결과가 자동으로 채워졌습니다.</strong>
+              <p>업로드한 사진도 게시글 상세에 함께 표시됩니다. 상단의 내 의견 부분만 더해도 등록할 수 있어요.</p>
+            </span>
           </div>
         )}
         <input name="title" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} maxLength={36} placeholder="게시글 제목" required />
@@ -2177,6 +2194,7 @@ function PostDetailPage({
 function SharedImageSearchAttachment({ metadata, openImage }: { metadata: ImageShareMetadata; openImage: (art: Artwork) => void }) {
   const art = metadata.artwork;
   const sources = metadata.sources ?? [];
+  const uploadedImage = metadata.uploadedImage;
 
   return (
     <section className="shared-image-attachment">
@@ -2188,22 +2206,33 @@ function SharedImageSearchAttachment({ metadata, openImage }: { metadata: ImageS
         <span>CLIP {metadata.similarity.toFixed(3)}</span>
       </div>
       <div className="shared-image-body">
-        <button className="shared-artwork-card" type="button" onClick={() => openImage(art)}>
-          <img
-            src={art.image || placeholder(art)}
-            alt={displayArtworkTitle(art)}
-            onError={(event) => {
-              event.currentTarget.onerror = null;
-              event.currentTarget.src = placeholder(art);
-            }}
-          />
-          <span>
-            <strong>{displayArtworkTitle(art)}</strong>
-            <em>
-              {art.artist} · {art.year}
-            </em>
-          </span>
-        </button>
+        <div className={`shared-image-comparison ${uploadedImage?.dataUrl ? "" : "is-single"}`}>
+          {uploadedImage?.dataUrl && (
+            <figure className="shared-upload-card">
+              <img src={uploadedImage.dataUrl} alt={uploadedImage.caption || "이미지 검색에 업로드한 사진"} />
+              <figcaption>
+                <strong>업로드한 사진</strong>
+                <em>이미지 검색에 사용한 사진</em>
+              </figcaption>
+            </figure>
+          )}
+          <button className="shared-artwork-card" type="button" onClick={() => openImage(art)}>
+            <img
+              src={art.image || placeholder(art)}
+              alt={displayArtworkTitle(art)}
+              onError={(event) => {
+                event.currentTarget.onerror = null;
+                event.currentTarget.src = placeholder(art);
+              }}
+            />
+            <span>
+              <strong>{displayArtworkTitle(art)}</strong>
+              <em>
+                {art.artist} · {art.year}
+              </em>
+            </span>
+          </button>
+        </div>
         <div className="shared-image-notes">
           {metadata.explanation?.summary && <p>{metadata.explanation.summary}</p>}
           {metadata.explanation?.similarParts?.length ? (
@@ -2613,11 +2642,13 @@ function imageSearchShareDraft({
   explanation,
   sources,
   sourceQuery,
+  uploadedImageDataUrl,
 }: {
   match: ImageSearchMatch;
   explanation: ImageSearchResponse["explanation"];
   sources: ExternalSearchResult[];
   sourceQuery: string;
+  uploadedImageDataUrl?: string;
 }): ImageShareDraft {
   const title = truncateText(`내 사진이 ${displayArtworkTitle(match.artwork)}랑 닮았나요?`, 36);
   const metadata: ImageShareMetadata = {
@@ -2627,6 +2658,12 @@ function imageSearchShareDraft({
     explanation,
     sources: sources.slice(0, 5),
     sourceQuery,
+    uploadedImage: uploadedImageDataUrl
+      ? {
+          dataUrl: uploadedImageDataUrl,
+          caption: "사용자가 이미지 검색에 업로드한 사진",
+        }
+      : undefined,
   };
   return {
     title,
@@ -2800,6 +2837,21 @@ async function imageFileToMissionDataUrl(file: File) {
   }
 }
 
+async function imageDataUrlToSharePreviewDataUrl(dataUrl: string) {
+  const image = await loadImage(dataUrl);
+  let maxSize = IMAGE_SHARE_PREVIEW_MAX_SIZE;
+  let quality = 0.72;
+  let output = imageToSizedJpegDataUrl(image, maxSize, quality);
+
+  for (let attempt = 0; attempt < 5 && output.length > IMAGE_SHARE_PREVIEW_MAX_CHARS; attempt += 1) {
+    maxSize = Math.max(240, Math.round(maxSize * 0.82));
+    quality = Math.max(0.5, quality - 0.08);
+    output = imageToSizedJpegDataUrl(image, maxSize, quality);
+  }
+
+  return output;
+}
+
 function videoFrameToDataUrl(video: HTMLVideoElement) {
   const canvas = document.createElement("canvas");
   const maxSize = 1280;
@@ -2822,6 +2874,19 @@ function imageToMissionDataUrl(image: HTMLImageElement) {
   if (!context) throw new Error("canvas_unavailable");
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL("image/jpeg", 0.88);
+}
+
+function imageToSizedJpegDataUrl(image: HTMLImageElement, maxSize: number, quality: number) {
+  const canvas = document.createElement("canvas");
+  const scale = Math.min(1, maxSize / Math.max(image.naturalWidth, image.naturalHeight));
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("canvas_unavailable");
+  context.fillStyle = "#fffdf8";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
 }
 
 function loadImage(src: string) {

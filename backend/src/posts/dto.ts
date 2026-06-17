@@ -6,7 +6,7 @@ export class CreatePostDto {
   title!: string;
 
   @IsString()
-  @Length(1, 8000)
+  @Length(1, 100000)
   body!: string;
 
   @IsString()
