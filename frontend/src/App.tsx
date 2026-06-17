@@ -51,7 +51,7 @@ const titleSteps = [
 
 const artworkFilters = ["전체", "서양", "동양", "한국화", "조각", "설치예술", "공예", "미디어아트", "현대", "인상주의", "추상", "초상", "풍경", "수묵"];
 const collectionProgressFilters = artworkFilters.filter((filter) => filter !== "전체");
-const boardHiddenMuseumIds = new Set(["national-museum"]);
+const boardHiddenMuseumIds = new Set(["national-museum", "general-post"]);
 const deletedCommentBody = "삭제된 댓글입니다.";
 
 type SortMode = "name" | "year";
@@ -1496,7 +1496,7 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
 
   const filteredPosts = posts.filter((post) => {
     const visibleBody = parseImageSharePostBody(post.body).text;
-    const text = `${post.title} ${visibleBody} ${boardMuseumName(post)}`.toLowerCase();
+    const text = `${post.title} ${visibleBody} ${boardMuseumName(post)} ${(post.tags ?? []).join(" ")}`.toLowerCase();
     const museum = visibleMuseums.find((item) => item.id === post.museumId);
     const museumMatch =
       (search.scope === "전체" || museum?.scope === search.scope) &&
@@ -1555,10 +1555,19 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
                     {boardMuseumName(post) && <span>{boardMuseumName(post)}</span>}
                   </div>
                   <p>{parseImageSharePostBody(post.body).text}</p>
+                  {(post.tags ?? []).length > 0 && (
+                    <div className="board-row-tags">
+                      {(post.tags ?? []).map((tag) => (
+                        <span key={tag} className="post-tag">
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="post-meta">
                     <span>{post.author}</span>
                     <span>{new Date(post.createdAt).toLocaleString("ko-KR")}</span>
-                    <span>{post.museumCountry}</span>
+                    {post.museumCountry && <span>{post.museumCountry}</span>}
                   </div>
                 </div>
                 <div className="board-counts">
@@ -1791,6 +1800,7 @@ function PostWritePage({
   const [withoutMuseum, setWithoutMuseum] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [bodyDraft, setBodyDraft] = useState("");
+  const [tagsDraft, setTagsDraft] = useState("");
   const [shareMetadata, setShareMetadata] = useState<ImageShareMetadata | null>(null);
   const [isPolicyHelpOpen, setIsPolicyHelpOpen] = useState(false);
   const isSubmittingRef = useRef(false);
@@ -1843,12 +1853,14 @@ function PostWritePage({
     const form = new FormData(formElement);
     const title = String(form.get("title")).trim();
     const body = String(form.get("body")).trim();
+    const tags = parseTagInput(String(form.get("tags") ?? ""));
     const result = await api
       .createPost({
         title,
         body: appendImageShareMetadata(body, shareMetadata),
         museumId: withoutMuseum ? "__none__" : draft.museumId,
         boardType,
+        ...(tags.length ? { tags } : {}),
       })
       .catch(() => {
         isSubmittingRef.current = false;
@@ -1925,6 +1937,14 @@ function PostWritePage({
           placeholder="미술관이나 작품에 대한 생각"
           required
         />
+        <input
+          name="tags"
+          value={tagsDraft}
+          onChange={(event) => setTagsDraft(event.target.value)}
+          maxLength={120}
+          placeholder="태그 (# 또는 쉼표로 구분)"
+        />
+        <p className="write-hint">예: #모네 #수련, 인상주의</p>
         <label className="write-option">
           <input
             type="checkbox"
@@ -2145,6 +2165,15 @@ function PostDetailPage({
             <h1>{post.title}</h1>
             <p>{parsedPostBody.text}</p>
             {parsedPostBody.metadata && <SharedImageSearchAttachment metadata={parsedPostBody.metadata} openImage={openImage} />}
+            {(post.tags ?? []).length > 0 && (
+              <div className="post-detail-tags">
+                {(post.tags ?? []).map((tag) => (
+                  <span key={tag} className="post-tag">
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="vote-row">
               <button onClick={() => vote("up")}>추천 {post.upVotes}</button>
               <button className="ghost-button" onClick={() => vote("down")}>
@@ -2898,6 +2927,21 @@ function readFileAsDataUrl(file: File) {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+function parseTagInput(value: string) {
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const raw of value.split(/[,\n]+|(?=#)/)) {
+    const tag = raw.replace(/^#+/, "").replace(/\s+/g, " ").trim().slice(0, 18);
+    if (!tag) continue;
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+    if (tags.length >= 5) break;
+  }
+  return tags;
 }
 
 function unique(values: string[]) {

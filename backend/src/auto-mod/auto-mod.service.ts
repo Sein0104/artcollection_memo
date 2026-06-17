@@ -86,6 +86,10 @@ type AutoModState = {
 const AUTOMOD_TIMEOUT_MS = 20_000;
 const AUTOMOD_MAX_AGENT_STEPS = 5;
 const VALID_ACTIONS = new Set<AutoModAction>(["allow", "warn", "hold", "report"]);
+const DIRECT_THREAT_PATTERN =
+  /죽어버려|죽여버|죽일\s*(거야|게|것|수도)|죽인다|뒤진다|뒤져|살해|협박|가만\s*안\s*둔|kill yourself|i will kill|i'm going to kill/i;
+const PHYSICAL_THREAT_PATTERN =
+  /(?:찾아\s*가|쫓아\s*가|기다려|칼로|흉기로|불\s*질러|태워|해치|때리|패|찌르).{0,20}(?:해치|때리|패|찌르|죽|보복|응징|가만\s*안\s*둔|칼|흉기|불\s*질러|태워)|(?:해치|때리|패|찌르|죽|보복|응징).{0,20}(?:찾아\s*가|쫓아\s*가|기다려|칼|흉기)/iu;
 const HISTORY_RISK_CATEGORIES = [
   "spam",
   "threat",
@@ -120,6 +124,7 @@ const AUTOMOD_DECISION_FUNCTION_TOOL = {
   parameters: AUTOMOD_RESPONSE_JSON_SCHEMA,
   strict: true,
 };
+const AUTOMOD_PLANNER_FUNCTION_NAME = "select_next_tool";
 
 @Injectable()
 export class AutoModService {
@@ -173,7 +178,7 @@ export class AutoModService {
     const executedTools = new Set<AutoModAgentToolName>();
 
     for (let step = 1; step <= AUTOMOD_MAX_AGENT_STEPS; step += 1) {
-      const choice = this.chooseNextAgentTool(state, executedTools);
+      const choice = await this.planNextTool(state, executedTools);
       if (!choice) break;
       executedTools.add(choice.tool);
 
@@ -189,6 +194,147 @@ export class AutoModService {
       summary: "Fallback decision executed after agent loop ended.",
     });
     return this.decideAction(state);
+  }
+
+  // Agentic planner: the LLM dynamically selects the next tool, with deterministic
+  // guardrails (rule_check first, critical-risk short-circuit) and a deterministic
+  // fallback when the LLM is disabled, times out, or returns an invalid choice.
+  private async planNextTool(state: AutoModState, executedTools: Set<AutoModAgentToolName>): Promise<AutoModPlannerChoice | null> {
+    // Guardrail A: deterministic checks always run first as a safety baseline.
+    if (!executedTools.has("rule_check")) {
+      return {
+        tool: "rule_check",
+        reason: "Every review starts with deterministic checks before the planner reasons about context or LLM judgment.",
+      };
+    }
+
+    // Guardrail B: a critical threat/privacy risk short-circuits straight to the decision.
+    if (this.hasCriticalRisk(state)) {
+      return executedTools.has("decide_action")
+        ? null
+        : {
+            tool: "decide_action",
+            reason: "A high-severity threat or privacy risk was already found, so the agent decides without extra tools.",
+          };
+    }
+
+    // Primary planner: let the LLM choose the next tool dynamically.
+    if (this.shouldUseLlm() && state.input.useLlm !== false) {
+      const llmChoice = await this.chooseNextToolWithLlm(state, executedTools).catch(() => null);
+      if (llmChoice) {
+        if (llmChoice.tool === "decide_action" && this.shouldRunLlmJudge(state, executedTools) && !this.hasRiskSignal(state)) {
+          return {
+            tool: "llm_judge",
+            reason: "No deterministic risk was found, so the configured LLM must independently review the content before final approval.",
+          };
+        }
+        return llmChoice;
+      }
+    }
+
+    // Fallback planner: deterministic rules when the LLM is disabled or fails.
+    return this.chooseNextAgentTool(state, executedTools);
+  }
+
+  // Tools the LLM planner is allowed to pick next, given what already ran and the
+  // target. This whitelist is the core guardrail: the LLM can only choose from here.
+  private selectableTools(state: AutoModState, executedTools: Set<AutoModAgentToolName>): AutoModAgentToolName[] {
+    const tools: AutoModAgentToolName[] = [];
+    if (!executedTools.has("thread_context_check") && Boolean(state.input.postId || state.input.parentId)) {
+      tools.push("thread_context_check");
+    }
+    if (!executedTools.has("history_check")) tools.push("history_check");
+    if (!executedTools.has("llm_judge")) tools.push("llm_judge");
+    tools.push("decide_action");
+    return tools;
+  }
+
+  private async chooseNextToolWithLlm(
+    state: AutoModState,
+    executedTools: Set<AutoModAgentToolName>,
+  ): Promise<AutoModPlannerChoice | null> {
+    const apiKey = this.config.get<string>("OPENAI_API_KEY")?.trim();
+    if (!apiKey) return null;
+
+    const selectable = this.selectableTools(state, executedTools);
+    if (!selectable.length) return null;
+    // Nothing meaningful left to gather: just finish.
+    if (selectable.length === 1) {
+      return { tool: selectable[0], reason: "Only one tool remains, so the planner selects it." };
+    }
+
+    const plannerTool = {
+      type: "function",
+      name: AUTOMOD_PLANNER_FUNCTION_NAME,
+      description: "Pick the single next tool for the moderation reasoning loop, or decide_action to finish.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          tool: { type: "string", enum: selectable },
+          reason: { type: "string" },
+        },
+        required: ["tool", "reason"],
+      },
+      strict: true,
+    };
+
+    const response = await this.fetchWithTimeout(
+      "https://api.openai.com/v1/responses",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: this.modelName(),
+          input: [{ role: "user", content: [{ type: "input_text", text: this.plannerPrompt(state, executedTools, selectable) }] }],
+          tools: [plannerTool],
+          tool_choice: { type: "function", name: AUTOMOD_PLANNER_FUNCTION_NAME },
+          parallel_tool_calls: false,
+        }),
+      },
+      AUTOMOD_TIMEOUT_MS,
+    );
+
+    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!response.ok) return null;
+
+    const argumentsText = this.extractFunctionCallArguments(payload, AUTOMOD_PLANNER_FUNCTION_NAME);
+    if (!argumentsText) return null;
+
+    const parsed = this.parseJsonObject(argumentsText);
+    const chosen = typeof parsed.tool === "string" ? (parsed.tool as AutoModAgentToolName) : null;
+    // Guardrail: the chosen tool must be inside the selectable whitelist; otherwise
+    // discard the LLM answer so planNextTool falls back to deterministic rules.
+    if (!chosen || !selectable.includes(chosen)) return null;
+
+    const reason = this.nonEmptyString(parsed.reason) || "LLM planner selected this tool.";
+    return { tool: chosen, reason: `LLM planner: ${reason}` };
+  }
+
+  private plannerPrompt(state: AutoModState, executedTools: Set<AutoModAgentToolName>, selectable: AutoModAgentToolName[]): string {
+    const toolMenu = selectable.map((tool) => `- ${tool}: ${this.agentTools[tool].description}`).join("\n");
+    return [
+      "You are the planner for an Auto-Mod agent on a Korean art community board.",
+      "Decide the single next tool to run in the moderation reasoning loop, then call select_next_tool.",
+      "Gather thread context, author history, or LLM judgment only when it could change the moderation decision.",
+      "If the current evidence is already enough, choose decide_action to finish quickly instead of wasting steps.",
+      "",
+      "Available tools (choose exactly one):",
+      toolMenu,
+      "",
+      `Already executed: ${[...executedTools].join(", ") || "none"}`,
+      "Current evidence:",
+      `- rule findings: ${JSON.stringify(state.findings.map((finding) => ({ category: finding.category, severity: finding.severity })))}`,
+      `- thread context checked: ${state.threadContext.checked}`,
+      `- author warnings (30d): ${state.context.warningCount30d}`,
+      `- author held/reported (30d): ${state.context.heldOrReportedCount30d}`,
+      `- llm judgment done: ${Boolean(state.llmDecision)}`,
+      `- target type: ${state.input.targetType}`,
+      `Content excerpt: ${this.compactExcerpt(state.normalizedText)}`,
+    ].join("\n");
   }
 
   private chooseNextAgentTool(state: AutoModState, executedTools: Set<AutoModAgentToolName>): AutoModPlannerChoice | null {
@@ -650,7 +796,7 @@ export class AutoModService {
       });
     }
 
-    if (/죽어버려|죽여버|kill yourself|i will kill|살해|협박/i.test(text)) {
+    if (DIRECT_THREAT_PATTERN.test(text) || PHYSICAL_THREAT_PATTERN.test(text)) {
       add({
         category: "threat",
         severity: 5,
@@ -850,6 +996,9 @@ export class AutoModService {
         agent: {
           maxSteps: AUTOMOD_MAX_AGENT_STEPS,
           planner: "dynamic-rule-planner-v1",
+          // Whether the LLM actually directed any tool selection this run, vs. the
+          // deterministic fallback handling every step.
+          llmDirected: state.steps.some((agentStep) => agentStep.plannerReason.startsWith("LLM planner:")),
           availableTools: Object.values(this.agentTools).map(({ name, description }) => ({ name, description })),
           steps: state.steps,
         },

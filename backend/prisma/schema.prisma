@@ -98,6 +98,7 @@ model Post {
   author    User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
   title     String
   body      String
+  tags      String[]      @default([])
   boardType String        @default("free")
   status    String        @default("published")
   museumId  String

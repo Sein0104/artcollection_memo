@@ -16,6 +16,7 @@ __pycache__/
 dist/
 build/
 .cache/
+.vite/
 .pytest_cache/
 .mypy_cache/
 

@@ -172,6 +172,13 @@ function auth() {
   };
 }
 
+// Tags are supplied by the author only; missing tags stay empty without network calls.
+function config() {
+  return {
+    get: () => "",
+  };
+}
+
 function autoMod(decision) {
   const cases = [];
   const reviewInputs = [];
@@ -201,7 +208,7 @@ function autoMod(decision) {
 async function testReportCreateDoesNotPersist() {
   const prisma = makePrisma();
   const mod = autoMod(reportDecision);
-  const service = new PostsService(prisma, auth(), mod);
+  const service = new PostsService(prisma, auth(), mod, config());
 
   const result = await service.create({ title: "Bad", body: "Bad body", museumId: museum.id, boardType: "free" });
 
@@ -216,7 +223,7 @@ async function testReportCreateDoesNotPersist() {
 async function testAllowedCreatePersists() {
   const prisma = makePrisma();
   const mod = autoMod(allowedDecision);
-  const service = new PostsService(prisma, auth(), mod);
+  const service = new PostsService(prisma, auth(), mod, config());
 
   const result = await service.create({ title: "Good", body: "Good body", museumId: museum.id, boardType: "free" });
 
@@ -230,7 +237,7 @@ async function testAllowedCreatePersists() {
 async function testWarningCreatePersistsWithNotice() {
   const prisma = makePrisma();
   const mod = autoMod(warningDecision);
-  const service = new PostsService(prisma, auth(), mod);
+  const service = new PostsService(prisma, auth(), mod, config());
 
   const result = await service.create({ title: "Warn", body: "Warning body", museumId: museum.id, boardType: "free" });
 
@@ -247,7 +254,7 @@ async function testWarningCreatePersistsWithNotice() {
 async function testHoldCreatePersistsWithNotice() {
   const prisma = makePrisma();
   const mod = autoMod(holdDecision);
-  const service = new PostsService(prisma, auth(), mod);
+  const service = new PostsService(prisma, auth(), mod, config());
 
   const result = await service.create({ title: "Hold", body: "Hold body", museumId: museum.id, boardType: "free" });
 
@@ -264,7 +271,7 @@ async function testHoldCreatePersistsWithNotice() {
 async function testReportCommentDoesNotPersist() {
   const prisma = makePrisma();
   const mod = autoMod(reportDecision);
-  const service = new PostsService(prisma, auth(), mod);
+  const service = new PostsService(prisma, auth(), mod, config());
 
   const result = await service.comment("post-existing", { body: "Bad comment" });
 
@@ -279,7 +286,7 @@ async function testReportCommentDoesNotPersist() {
 async function testWarningCommentPersistsWithNotice() {
   const prisma = makePrisma();
   const mod = autoMod(warningDecision);
-  const service = new PostsService(prisma, auth(), mod);
+  const service = new PostsService(prisma, auth(), mod, config());
 
   const result = await service.comment("post-existing", { body: "Warning comment" });
 
@@ -294,7 +301,7 @@ async function testWarningCommentPersistsWithNotice() {
 async function testDeleteCommentSoftDeletesAndKeepsReplies() {
   const prisma = makePrisma({ withComments: true });
   const mod = autoMod(allowedDecision);
-  const service = new PostsService(prisma, auth(), mod);
+  const service = new PostsService(prisma, auth(), mod, config());
 
   const result = await service.removeComment("post-existing", "comment-parent");
 
@@ -309,7 +316,7 @@ async function testDeleteCommentSoftDeletesAndKeepsReplies() {
 async function testReportUpdateDoesNotMutatePost() {
   const prisma = makePrisma();
   const mod = autoMod(reportDecision);
-  const service = new PostsService(prisma, auth(), mod);
+  const service = new PostsService(prisma, auth(), mod, config());
 
   const result = await service.update("post-existing", { title: "Changed", body: "Bad update" });
 
@@ -323,7 +330,7 @@ async function testReportUpdateDoesNotMutatePost() {
 async function testWarningUpdateMutatesPostWithNotice() {
   const prisma = makePrisma();
   const mod = autoMod(warningDecision);
-  const service = new PostsService(prisma, auth(), mod);
+  const service = new PostsService(prisma, auth(), mod, config());
 
   const result = await service.update("post-existing", { title: "Changed", body: "Warning update" });
 

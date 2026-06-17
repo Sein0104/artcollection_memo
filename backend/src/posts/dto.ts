@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString, Length } from "class-validator";
+import { ArrayMaxSize, IsArray, IsIn, IsOptional, IsString, Length } from "class-validator";
 
 export class CreatePostDto {
   @IsString()
@@ -15,6 +15,12 @@ export class CreatePostDto {
   @IsOptional()
   @IsIn(["free", "review"])
   boardType?: "free" | "review";
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(5)
+  @IsString({ each: true })
+  tags?: string[];
 }
 
 export class CreateCommentDto {
@@ -40,4 +46,10 @@ export class UpdatePostDto {
   @IsString()
   @Length(1, 1200)
   body!: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(5)
+  @IsString({ each: true })
+  tags?: string[];
 }

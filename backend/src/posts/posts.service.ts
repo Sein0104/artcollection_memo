@@ -6,6 +6,8 @@ import { AutoModService } from "../auto-mod/auto-mod.service";
 import { CreateCommentDto, CreatePostDto, UpdatePostDto, VotePostDto } from "./dto";
 
 const GENERAL_POST_MUSEUM_ID = "general-post";
+const MAX_POST_TAGS = 5;
+const MAX_POST_TAG_LENGTH = 18;
 const DELETED_COMMENT_BODY = "삭제된 댓글입니다.";
 const IMAGE_SHARE_MARKER_PATTERN = /\n?\[\[ARTCATCH_IMAGE_SHARE:[A-Za-z0-9+/=]+\]\]\s*$/;
 const TITLE_STEPS = [
@@ -29,6 +31,7 @@ type ListPostsOptions = {
   country?: string;
   area?: string;
   museumId?: string;
+  tag?: string;
 };
 
 const DEFAULT_POST_PAGE_SIZE = 8;
@@ -118,11 +121,14 @@ export class PostsService {
       return { ...(await this.list()), moderation: this.autoMod.noticeFor(moderation) };
     }
 
+    const tags = this.resolveTags(dto.tags);
+
     const post = await this.prisma.post.create({
       data: {
         authorId: user.id,
         title,
         body,
+        tags,
         museumId,
         boardType: dto.boardType ?? "free",
         status: this.autoMod.publicStatusFor(moderation.action),
@@ -276,11 +282,14 @@ export class PostsService {
       return { ...(await this.detail(postId, cookieHeader)), moderation: this.autoMod.noticeFor(moderation) };
     }
 
+    const tags = dto.tags === undefined ? post.tags ?? [] : this.resolveTags(dto.tags);
+
     await this.prisma.post.update({
       where: { id: postId },
       data: {
         title,
         body,
+        tags,
         status: this.autoMod.publicStatusFor(moderation.action),
       },
     });
@@ -315,6 +324,11 @@ export class PostsService {
     const country = this.nonDefaultFilter(options.country);
     const area = this.nonDefaultFilter(options.area);
     const museumId = this.nonDefaultFilter(options.museumId);
+    const tag = this.nonDefaultFilter(options.tag);
+
+    if (tag) {
+      conditions.push({ tags: { has: tag } });
+    }
 
     if (board === "popular") {
       conditions.push({ upVotes: { gte: 10 } });
@@ -373,10 +387,10 @@ export class PostsService {
 
     const museum = await this.prisma.museum.upsert({
       where: { id: GENERAL_POST_MUSEUM_ID },
-      update: {},
+      update: { name: "일반 게시글" },
       create: {
         id: GENERAL_POST_MUSEUM_ID,
-        name: "태그 없음",
+        name: "일반 게시글",
         scope: "일반",
         country: "",
         area: "",
@@ -402,6 +416,7 @@ export class PostsService {
       authorTitle: this.titleFor(post.author.totalEarnedPoints ?? 0),
       title: post.title,
       body: post.body,
+      tags: post.tags ?? [],
       boardType: post.boardType ?? "free",
       status: post.status ?? "published",
       museumId: post.museumId,
@@ -449,5 +464,28 @@ export class PostsService {
       }
     }
     return roots;
+  }
+
+  private resolveTags(authorTags: string[] | undefined) {
+    return this.normalizeTags(authorTags);
+  }
+
+  private normalizeTags(value: unknown): string[] {
+    const rawItems = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+    const seen = new Set<string>();
+    const tags: string[] = [];
+    for (const item of rawItems) {
+      if (typeof item !== "string") continue;
+      for (const rawTag of item.split(/[,\n]+|(?=#)/)) {
+        const tag = rawTag.replace(/^#+/, "").replace(/\s+/g, " ").trim().slice(0, MAX_POST_TAG_LENGTH);
+        if (!tag) continue;
+        const key = tag.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        tags.push(tag);
+        if (tags.length >= MAX_POST_TAGS) return tags;
+      }
+    }
+    return tags;
   }
 }

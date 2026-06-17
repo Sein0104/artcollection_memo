@@ -17,6 +17,7 @@ type ListPostsQuery = {
   country?: string;
   area?: string;
   museumId?: string;
+  tag?: string;
 };
 
 @Controller("posts")

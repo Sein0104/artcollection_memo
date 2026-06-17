@@ -4,15 +4,15 @@ services:
     container_name: artcatch-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: artcatch
-      POSTGRES_PASSWORD: artcatch
-      POSTGRES_DB: artcatch
+      POSTGRES_USER: ${POSTGRES_USER:-artcatch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your local .env}
+      POSTGRES_DB: ${POSTGRES_DB:-artcatch}
     ports:
       - "5432:5432"
     volumes:
       - artcatch-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U artcatch -d artcatch"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 3s
       retries: 10

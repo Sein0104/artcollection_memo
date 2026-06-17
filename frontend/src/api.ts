@@ -25,6 +25,7 @@ type PostListParams = {
   country?: string;
   area?: string;
   museumId?: string;
+  tag?: string;
 };
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -92,6 +93,7 @@ export const api = {
     body: string;
     museumId: string;
     boardType: "free" | "review";
+    tags?: string[];
   }) => request<{ posts: Post[]; moderation?: ModerationNotice }>("/posts", { method: "POST", body: JSON.stringify(body) }),
   createComment: (postId: string, body: { body: string; parentId?: string }) =>
     request<{ post: PostDetail; moderation?: ModerationNotice }>(`/posts/${encodeURIComponent(postId)}/comments`, {
@@ -107,7 +109,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  updatePost: (postId: string, body: { title: string; body: string }) =>
+  updatePost: (postId: string, body: { title: string; body: string; tags?: string[] }) =>
     request<{ post: PostDetail; moderation?: ModerationNotice }>(`/posts/${encodeURIComponent(postId)}`, {
       method: "PATCH",
       body: JSON.stringify(body),
