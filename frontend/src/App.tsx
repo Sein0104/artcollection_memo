@@ -598,6 +598,10 @@ function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
   const [result, setResult] = useState<ImageSearchResponse | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState("");
+  const [researchQuery, setResearchQuery] = useState("");
+  const [researchResponse, setResearchResponse] = useState<ExternalSearchResponse | null>(null);
+  const [researchError, setResearchError] = useState("");
+  const [isResearching, setIsResearching] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const bestMatch = result?.bestMatch ?? result?.matches[0] ?? null;
 
@@ -614,6 +618,10 @@ function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
     setIsSearching(true);
     setError("");
     setResult(null);
+    setResearchQuery("");
+    setResearchResponse(null);
+    setResearchError("");
+    setIsResearching(false);
     try {
       const imageDataUrl = await imageFileToMissionDataUrl(file);
       setPreviewUrl(imageDataUrl);
@@ -630,6 +638,23 @@ function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
     }
   }
 
+  async function loadArtworkResearch() {
+    if (!bestMatch || isResearching) return;
+
+    const query = artworkResearchQuery(bestMatch.artwork);
+    setResearchQuery(query);
+    setResearchResponse(null);
+    setResearchError("");
+    setIsResearching(true);
+    try {
+      setResearchResponse(await api.externalSearch(query));
+    } catch (researchError) {
+      setResearchError(researchError instanceof Error ? researchError.message : "external_search_failed");
+    } finally {
+      setIsResearching(false);
+    }
+  }
+
   return (
     <section className="app-page image-search-page is-active">
       <div className="page-title board-title">
@@ -643,7 +668,7 @@ function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
       <section className="image-search-panel">
         <div className="image-search-copy">
           <h2>사진 한 장으로 가장 가까운 작품을 찾습니다</h2>
-          <p>로컬 CLIP으로 후보를 넓게 찾고, Vision LLM이 후보들을 다시 비교해 최종 작품을 고릅니다.</p>
+          <p>현재 사이트 내에 있는 작품 기준으로 판단합니다.</p>
         </div>
         <div className="image-search-actions">
           <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isSearching}>
@@ -705,9 +730,71 @@ function ImageSearchPage({ openImage }: { openImage: (art: Artwork) => void }) {
                 </div>
               ) : null}
               {result?.explanation?.caveat && <p className="image-search-caveat">{result.explanation.caveat}</p>}
+              <div className="image-search-research-actions">
+                <button type="button" className="research-button" onClick={() => void loadArtworkResearch()} disabled={isResearching}>
+                  {isResearching ? "자료 검색 중" : "작품 자료 찾기"}
+                </button>
+              </div>
             </div>
           </div>
+          {(researchQuery || researchResponse || researchError || isResearching) && (
+            <ArtworkResearchPanel query={researchQuery} response={researchResponse} isLoading={isResearching} error={researchError} />
+          )}
         </section>
+      ) : null}
+    </section>
+  );
+}
+
+function ArtworkResearchPanel({
+  query,
+  response,
+  isLoading,
+  error,
+}: {
+  query: string;
+  response: ExternalSearchResponse | null;
+  isLoading: boolean;
+  error: string;
+}) {
+  const results = response?.results ?? [];
+
+  return (
+    <section className="artwork-research-panel" aria-live="polite">
+      <div className="artwork-research-header">
+        <div>
+          <span className="eyebrow">MCP RESEARCH</span>
+          <h3>작품 외부 자료</h3>
+        </div>
+        {query && <span>{query}</span>}
+      </div>
+      <div className="mcp-flow" aria-label="MCP 검색 흐름">
+        <span>ArtCatch</span>
+        <span>MCP tool</span>
+        <span>External sources</span>
+      </div>
+
+      {isLoading ? <div className="external-search-state">MCP 검색 도구로 작품 자료를 찾고 있습니다.</div> : null}
+      {!isLoading && error ? <div className="external-search-state">외부 자료를 불러오지 못했습니다.</div> : null}
+      {!isLoading && response?.configured === false ? <div className="external-search-state">MCP 검색 서버 설정이 필요합니다.</div> : null}
+      {!isLoading && response?.configured !== false && !error && response && !results.length ? (
+        <div className="external-search-state">표시할 외부 자료가 없습니다.</div>
+      ) : null}
+      {results.length ? (
+        <div className="external-search-list">
+          {results.map((result) => {
+            const snippet = result.snippet?.replace(/^Content:\s*/i, "");
+            return (
+              <a className="external-search-item" href={result.url} target="_blank" rel="noreferrer" key={result.url}>
+                <div>
+                  <strong>{result.title}</strong>
+                  <span>{result.source}</span>
+                </div>
+                {snippet ? <p>{snippet}</p> : null}
+              </a>
+            );
+          })}
+        </div>
       ) : null}
     </section>
   );
@@ -2356,6 +2443,10 @@ function imageSearchConfidenceLabel(confidence: "high" | "medium" | "low") {
   if (confidence === "high") return "판단 강함";
   if (confidence === "low") return "판단 약함";
   return "판단 보통";
+}
+
+function artworkResearchQuery(art: Artwork) {
+  return [displayArtworkTitle(art), art.artist, "official museum collection artwork analysis"].filter(Boolean).join(" ");
 }
 
 function translateArtworkText(value: string) {
