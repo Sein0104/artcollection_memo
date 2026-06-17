@@ -172,7 +172,7 @@ function auth() {
   };
 }
 
-// No OPENAI_API_KEY in tests, so auto-tagging short-circuits to [] without any network.
+// Tags are supplied by the author only; missing tags stay empty without network calls.
 function config() {
   return {
     get: () => "",

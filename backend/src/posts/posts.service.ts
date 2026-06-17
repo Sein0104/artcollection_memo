@@ -1,5 +1,4 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import { randomUUID } from "node:crypto";
 import { PrismaService } from "../prisma.service";
 import { AuthService } from "../auth/auth.service";
@@ -9,15 +8,6 @@ import { CreateCommentDto, CreatePostDto, UpdatePostDto, VotePostDto } from "./d
 const GENERAL_POST_MUSEUM_ID = "general-post";
 const MAX_POST_TAGS = 5;
 const MAX_POST_TAG_LENGTH = 18;
-const POST_TAGGING_TIMEOUT_MS = 15_000;
-const POST_TAGS_JSON_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    tags: { type: "array", items: { type: "string" } },
-  },
-  required: ["tags"],
-};
 const DELETED_COMMENT_BODY = "삭제된 댓글입니다.";
 const IMAGE_SHARE_MARKER_PATTERN = /\n?\[\[ARTCATCH_IMAGE_SHARE:[A-Za-z0-9+/=]+\]\]\s*$/;
 const TITLE_STEPS = [
@@ -53,7 +43,6 @@ export class PostsService {
     private readonly prisma: PrismaService,
     private readonly auth: AuthService,
     private readonly autoMod: AutoModService,
-    private readonly config: ConfigService,
   ) {}
 
   async list(options: ListPostsOptions = {}) {
@@ -132,7 +121,7 @@ export class PostsService {
       return { ...(await this.list()), moderation: this.autoMod.noticeFor(moderation) };
     }
 
-    const tags = await this.resolveTags(dto.tags, title, visibleBody);
+    const tags = this.resolveTags(dto.tags);
 
     const post = await this.prisma.post.create({
       data: {
@@ -293,7 +282,7 @@ export class PostsService {
       return { ...(await this.detail(postId, cookieHeader)), moderation: this.autoMod.noticeFor(moderation) };
     }
 
-    const tags = await this.resolveTags(dto.tags, title, visibleBody);
+    const tags = dto.tags === undefined ? post.tags ?? [] : this.resolveTags(dto.tags);
 
     await this.prisma.post.update({
       where: { id: postId },
@@ -398,10 +387,10 @@ export class PostsService {
 
     const museum = await this.prisma.museum.upsert({
       where: { id: GENERAL_POST_MUSEUM_ID },
-      update: {},
+      update: { name: "일반 게시글" },
       create: {
         id: GENERAL_POST_MUSEUM_ID,
-        name: "태그 없음",
+        name: "일반 게시글",
         scope: "일반",
         country: "",
         area: "",
@@ -477,126 +466,26 @@ export class PostsService {
     return roots;
   }
 
-  // Tags come from the author when provided; otherwise the LLM auto-tags the post.
-  // Both paths run through normalizeTags so stored tags are always clean.
-  private async resolveTags(authorTags: string[] | undefined, title: string, body: string) {
-    const provided = this.normalizeTags(authorTags);
-    if (provided.length) return provided;
-    return this.generateTags(title, body);
-  }
-
-  private async generateTags(title: string, body: string): Promise<string[]> {
-    const apiKey = this.config.get<string>("OPENAI_API_KEY")?.trim();
-    const text = `${title}\n${body}`.trim();
-    if (!apiKey || !text) return [];
-
-    try {
-      const response = await this.fetchWithTimeout(
-        "https://api.openai.com/v1/responses",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: this.taggingModel(),
-            input: [{ role: "user", content: [{ type: "input_text", text: this.taggingPrompt(title, body) }] }],
-            text: {
-              format: {
-                type: "json_schema",
-                name: "post_tags",
-                strict: true,
-                schema: POST_TAGS_JSON_SCHEMA,
-              },
-            },
-            max_output_tokens: 200,
-          }),
-        },
-        POST_TAGGING_TIMEOUT_MS,
-      );
-
-      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!response.ok) return [];
-      const parsed = this.parseJsonObject(this.extractOutputText(payload));
-      return this.normalizeTags(parsed.tags);
-    } catch {
-      // Auto-tagging is best-effort: never block posting because tagging failed.
-      return [];
-    }
-  }
-
-  private taggingPrompt(title: string, body: string) {
-    return [
-      "You generate concise topic tags for a Korean art community board post.",
-      "Return 3 to 5 Korean tags that capture the artwork, artist, museum, technique, era, or theme.",
-      "Each tag must be a short noun phrase (1-3 words), no leading '#', no sentences, no duplicates.",
-      "Call the response with a JSON object: { \"tags\": [...] }.",
-      "",
-      `Title: ${title}`,
-      `Body: ${body.slice(0, 1500)}`,
-    ].join("\n");
-  }
-
-  private taggingModel() {
-    return (
-      this.config.get<string>("POST_TAG_MODEL") ||
-      this.config.get<string>("OPENAI_DOCENT_MODEL") ||
-      this.config.get<string>("OPENAI_VISION_MODEL") ||
-      "gpt-5.4-mini"
-    );
+  private resolveTags(authorTags: string[] | undefined) {
+    return this.normalizeTags(authorTags);
   }
 
   private normalizeTags(value: unknown): string[] {
-    if (!Array.isArray(value)) return [];
+    const rawItems = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
     const seen = new Set<string>();
     const tags: string[] = [];
-    for (const item of value) {
+    for (const item of rawItems) {
       if (typeof item !== "string") continue;
-      const tag = item.replace(/^#+/, "").replace(/\s+/g, " ").trim().slice(0, MAX_POST_TAG_LENGTH);
-      if (!tag) continue;
-      const key = tag.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      tags.push(tag);
-      if (tags.length >= MAX_POST_TAGS) break;
+      for (const rawTag of item.split(/[,\n]+|(?=#)/)) {
+        const tag = rawTag.replace(/^#+/, "").replace(/\s+/g, " ").trim().slice(0, MAX_POST_TAG_LENGTH);
+        if (!tag) continue;
+        const key = tag.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        tags.push(tag);
+        if (tags.length >= MAX_POST_TAGS) return tags;
+      }
     }
     return tags;
-  }
-
-  private async fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      return await fetch(url, { ...options, signal: controller.signal });
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  private extractOutputText(payload: Record<string, unknown>) {
-    const outputText = payload.output_text;
-    if (typeof outputText === "string") return outputText;
-
-    const output = Array.isArray(payload.output) ? payload.output : [];
-    return output
-      .flatMap((item) => (Array.isArray((item as { content?: unknown }).content) ? ((item as { content: unknown[] }).content) : []))
-      .map((item) => {
-        const record = item as { text?: unknown };
-        return typeof record.text === "string" ? record.text : "";
-      })
-      .join("\n");
-  }
-
-  private parseJsonObject(text: string) {
-    try {
-      const parsed = JSON.parse(text) as unknown;
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
-    } catch {
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) return {};
-      const parsed = JSON.parse(match[0]) as unknown;
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
-    }
   }
 }

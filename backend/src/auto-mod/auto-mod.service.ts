@@ -86,6 +86,10 @@ type AutoModState = {
 const AUTOMOD_TIMEOUT_MS = 20_000;
 const AUTOMOD_MAX_AGENT_STEPS = 5;
 const VALID_ACTIONS = new Set<AutoModAction>(["allow", "warn", "hold", "report"]);
+const DIRECT_THREAT_PATTERN =
+  /죽어버려|죽여버|죽일\s*(거야|게|것|수도)|죽인다|뒤진다|뒤져|살해|협박|가만\s*안\s*둔|kill yourself|i will kill|i'm going to kill/i;
+const PHYSICAL_THREAT_PATTERN =
+  /(?:찾아\s*가|쫓아\s*가|기다려|칼로|흉기로|불\s*질러|태워|해치|때리|패|찌르).{0,20}(?:해치|때리|패|찌르|죽|보복|응징|가만\s*안\s*둔|칼|흉기|불\s*질러|태워)|(?:해치|때리|패|찌르|죽|보복|응징).{0,20}(?:찾아\s*가|쫓아\s*가|기다려|칼|흉기)/iu;
 const HISTORY_RISK_CATEGORIES = [
   "spam",
   "threat",
@@ -217,7 +221,15 @@ export class AutoModService {
     // Primary planner: let the LLM choose the next tool dynamically.
     if (this.shouldUseLlm() && state.input.useLlm !== false) {
       const llmChoice = await this.chooseNextToolWithLlm(state, executedTools).catch(() => null);
-      if (llmChoice) return llmChoice;
+      if (llmChoice) {
+        if (llmChoice.tool === "decide_action" && this.shouldRunLlmJudge(state, executedTools) && !this.hasRiskSignal(state)) {
+          return {
+            tool: "llm_judge",
+            reason: "No deterministic risk was found, so the configured LLM must independently review the content before final approval.",
+          };
+        }
+        return llmChoice;
+      }
     }
 
     // Fallback planner: deterministic rules when the LLM is disabled or fails.
@@ -784,7 +796,7 @@ export class AutoModService {
       });
     }
 
-    if (/죽어버려|죽여버|kill yourself|i will kill|살해|협박/i.test(text)) {
+    if (DIRECT_THREAT_PATTERN.test(text) || PHYSICAL_THREAT_PATTERN.test(text)) {
       add({
         category: "threat",
         severity: 5,

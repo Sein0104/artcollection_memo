@@ -51,7 +51,7 @@ const titleSteps = [
 
 const artworkFilters = ["전체", "서양", "동양", "한국화", "조각", "설치예술", "공예", "미디어아트", "현대", "인상주의", "추상", "초상", "풍경", "수묵"];
 const collectionProgressFilters = artworkFilters.filter((filter) => filter !== "전체");
-const boardHiddenMuseumIds = new Set(["national-museum"]);
+const boardHiddenMuseumIds = new Set(["national-museum", "general-post"]);
 const deletedCommentBody = "삭제된 댓글입니다.";
 
 type SortMode = "name" | "year";
@@ -1558,24 +1558,16 @@ function CommunityPage({ museums, posts }: { museums: Museum[]; posts: Post[] })
                   {(post.tags ?? []).length > 0 && (
                     <div className="board-row-tags">
                       {(post.tags ?? []).map((tag) => (
-                        <button
-                          key={tag}
-                          type="button"
-                          className="post-tag"
-                          onClick={(event) => {
-                            event.preventDefault();
-                            setQuery(tag);
-                          }}
-                        >
+                        <span key={tag} className="post-tag">
                           #{tag}
-                        </button>
+                        </span>
                       ))}
                     </div>
                   )}
                   <div className="post-meta">
                     <span>{post.author}</span>
                     <span>{new Date(post.createdAt).toLocaleString("ko-KR")}</span>
-                    <span>{post.museumCountry}</span>
+                    {post.museumCountry && <span>{post.museumCountry}</span>}
                   </div>
                 </div>
                 <div className="board-counts">
@@ -1950,9 +1942,9 @@ function PostWritePage({
           value={tagsDraft}
           onChange={(event) => setTagsDraft(event.target.value)}
           maxLength={120}
-          placeholder="태그 (쉼표로 구분, 비워두면 AI가 자동 생성)"
+          placeholder="태그 (# 또는 쉼표로 구분)"
         />
-        <p className="write-hint">태그를 비워두면 작성 내용을 분석해 AI가 자동으로 태그를 달아줍니다.</p>
+        <p className="write-hint">예: #모네 #수련, 인상주의</p>
         <label className="write-option">
           <input
             type="checkbox"
@@ -2171,17 +2163,17 @@ function PostDetailPage({
         ) : (
           <>
             <h1>{post.title}</h1>
+            <p>{parsedPostBody.text}</p>
+            {parsedPostBody.metadata && <SharedImageSearchAttachment metadata={parsedPostBody.metadata} openImage={openImage} />}
             {(post.tags ?? []).length > 0 && (
               <div className="post-detail-tags">
                 {(post.tags ?? []).map((tag) => (
-                  <a key={tag} className="post-tag" href="#community">
+                  <span key={tag} className="post-tag">
                     #{tag}
-                  </a>
+                  </span>
                 ))}
               </div>
             )}
-            <p>{parsedPostBody.text}</p>
-            {parsedPostBody.metadata && <SharedImageSearchAttachment metadata={parsedPostBody.metadata} openImage={openImage} />}
             <div className="vote-row">
               <button onClick={() => vote("up")}>추천 {post.upVotes}</button>
               <button className="ghost-button" onClick={() => vote("down")}>
@@ -2940,7 +2932,7 @@ function readFileAsDataUrl(file: File) {
 function parseTagInput(value: string) {
   const seen = new Set<string>();
   const tags: string[] = [];
-  for (const raw of value.split(/[,\n]/)) {
+  for (const raw of value.split(/[,\n]+|(?=#)/)) {
     const tag = raw.replace(/^#+/, "").replace(/\s+/g, " ").trim().slice(0, 18);
     if (!tag) continue;
     const key = tag.toLowerCase();
