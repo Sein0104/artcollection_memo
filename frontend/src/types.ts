@@ -30,6 +30,7 @@ export type Post = {
   authorTitle?: string;
   title: string;
   body: string;
+  tags?: string[];
   boardType: "free" | "review";
   status?: "published" | "held" | "rejected";
   museumId: string;

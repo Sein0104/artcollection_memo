@@ -43,6 +43,14 @@ function config(values = {}) {
   };
 }
 
+// Returns a planner stub that hands back scripted tool choices in order, emulating an
+// LLM that dynamically selects the next tool. Returns null once the script is empty so
+// the loop falls back to deterministic rules.
+function scriptedPlanner(choices) {
+  const queue = [...choices];
+  return async () => queue.shift() ?? null;
+}
+
 async function review(input, options = {}) {
   const service = new AutoModService(
     fakePrisma(options),
@@ -51,6 +59,10 @@ async function review(input, options = {}) {
   if (options.llmDecision) {
     service.llmContextJudge = async () => options.llmDecision;
   }
+  // Keep the planner offline in tests. By default the LLM planner is disabled so the
+  // deterministic fallback drives tool selection; a case can pass options.planNext to
+  // script LLM-directed tool choices and prove the loop honors them.
+  service.chooseNextToolWithLlm = options.planNext ?? (async () => null);
   const payload =
     typeof input === "string"
       ? {
@@ -202,6 +214,23 @@ const cases = [
     expectedCategory: "contextual_attack",
     expectedSignal: "possible_contextual_sarcasm",
   },
+  {
+    // Proves the loop is driven by the planner's tool choices, not a fixed path: on a
+    // clearly safe post the deterministic planner would skip history_check, but here the
+    // scripted LLM planner directs an extra history_check before deciding.
+    name: "llm planner can direct an extra history check on a safe post",
+    input: "I really enjoyed the textures and warm light in this landscape.",
+    options: {
+      enableLlm: true,
+      planNext: scriptedPlanner([
+        { tool: "history_check", reason: "LLM planner: chose to verify author history before approving." },
+        { tool: "decide_action", reason: "LLM planner: enough evidence gathered to decide." },
+      ]),
+    },
+    expectedAction: "allow",
+    expectedSteps: ["rule_check", "history_check", "decide_action"],
+    expectedLlmDirected: true,
+  },
 ];
 
 for (const item of cases) {
@@ -211,6 +240,7 @@ for (const item of cases) {
   assert.ok(decision.confidence >= 0 && decision.confidence <= 1, `${item.name}: confidence range`);
   if (item.expectedCategory) assert.ok(decision.categories.includes(item.expectedCategory), `${item.name}: expected category`);
   if (item.expectedSignal) assert.ok(decision.evidence.threadContext.signals.includes(item.expectedSignal), `${item.name}: expected thread signal`);
+  if (item.expectedLlmDirected) assert.equal(decision.evidence.agent.llmDirected, true, `${item.name}: planner should be LLM-directed`);
   assertPlannerEvidence(decision, item);
   console.log(`PASS ${item.name}: ${decision.action}`);
 }
