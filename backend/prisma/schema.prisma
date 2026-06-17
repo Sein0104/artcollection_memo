@@ -1,0 +1,299 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CollectionSource {
+  GENERAL
+  MISSION
+}
+
+model User {
+  id                      String                   @id @default(cuid())
+  nickname                String                   @unique
+  googleId                String?                  @unique
+  email                   String?                  @unique
+  avatarUrl               String?
+  passwordHash            String
+  passwordSalt            String
+  points                  Int                      @default(40)
+  totalEarnedPoints       Int                      @default(40)
+  installedRewardId       String?
+  installedReward         Artwork?                 @relation("InstalledReward", fields: [installedRewardId], references: [id])
+  sessions                AuthSession[]
+  collections             CollectionEntry[]
+  purchases               Purchase[]
+  posts                   Post[]
+  comments                PostComment[]
+  postVotes               PostVote[]
+  missionCompletions      MissionCompletion[]
+  missionAnalyses         MissionAnalysisRecord[]
+  missionAnalysisAttempts MissionAnalysisAttempt[]
+  moderationCases         ModerationCase[]
+  moderationWarnings      ModerationWarning[]
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+}
+
+model AuthSession {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Artwork {
+  id                      String                   @id
+  title                   String
+  artist                  String
+  year                    String
+  origin                  String
+  period                  String
+  region                  String
+  category                String[]
+  tags                    String[]
+  palette                 Int[]
+  image                   String?
+  premium                 Boolean                  @default(false)
+  cost                    Int                      @default(0)
+  featureVector           Json?
+  installedBy             User[]                   @relation("InstalledReward")
+  collections             CollectionEntry[]
+  purchases               Purchase[]
+  missionCompletions      MissionCompletion[]
+  missionAnalyses         MissionAnalysisRecord[]
+  missionAnalysisAttempts MissionAnalysisAttempt[]
+  knowledgeEntries        ArtworkKnowledge[]
+  imageEmbeddings         ArtworkImageEmbedding[]
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+}
+
+model Museum {
+  id        String   @id
+  name      String
+  scope     String
+  country   String   @default("")
+  area      String   @default("")
+  city      String
+  tags      String[]
+  posts     Post[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Post {
+  id        String        @id @default(cuid())
+  authorId  String
+  author    User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  tags      String[]      @default([])
+  boardType String        @default("free")
+  status    String        @default("published")
+  museumId  String
+  museum    Museum        @relation(fields: [museumId], references: [id])
+  upVotes   Int           @default(0)
+  downVotes Int           @default(0)
+  comments  PostComment[]
+  votes     PostVote[]
+  moderationCases ModerationCase[]
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model PostVote {
+  id        String   @id @default(cuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
+  @@index([userId])
+}
+
+model PostComment {
+  id        String        @id @default(cuid())
+  postId    String
+  post      Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parentId  String?
+  parent    PostComment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies   PostComment[] @relation("CommentReplies")
+  body      String
+  status    String        @default("published")
+  moderationCases ModerationCase[]
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([postId, parentId])
+  @@index([status, createdAt])
+}
+
+model ModerationCase {
+  id            String                @id @default(cuid())
+  targetType    String
+  targetId      String
+  postId        String?
+  post          Post?                 @relation(fields: [postId], references: [id], onDelete: Cascade)
+  commentId     String?
+  comment       PostComment?          @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  authorId      String
+  author        User                  @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  action        String
+  severity      Int
+  confidence    Float
+  categories    String[]
+  reason        String
+  evidence      Json?
+  authorMessage String                @default("")
+  adminSummary  String                @default("")
+  model         String                @default("")
+  status        String                @default("open")
+  warnings      ModerationWarning[]
+  reviewedAt    DateTime?
+  reviewerNote  String                @default("")
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@index([targetType, targetId])
+  @@index([authorId, createdAt])
+  @@index([status, createdAt])
+  @@index([action, createdAt])
+}
+
+model ModerationWarning {
+  id        String         @id @default(cuid())
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  caseId    String
+  case      ModerationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  message   String
+  createdAt DateTime       @default(now())
+
+  @@index([userId, createdAt])
+  @@index([caseId])
+}
+
+model CollectionEntry {
+  id         String           @id @default(cuid())
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artworkId  String
+  artwork    Artwork          @relation(fields: [artworkId], references: [id])
+  source     CollectionSource
+  missionKey String           @default("")
+  createdAt  DateTime         @default(now())
+
+  @@unique([userId, artworkId, source, missionKey])
+}
+
+model Purchase {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artworkId String
+  artwork   Artwork  @relation(fields: [artworkId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([userId, artworkId])
+}
+
+model MissionCompletion {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artworkId  String
+  artwork    Artwork  @relation(fields: [artworkId], references: [id])
+  missionKey String
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, artworkId, missionKey])
+  @@index([userId, missionKey])
+}
+
+model MissionAnalysisRecord {
+  id           String   @id @default(cuid())
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  artworkId    String
+  artwork      Artwork  @relation(fields: [artworkId], references: [id])
+  mode         String
+  score        Int
+  passed       Boolean
+  feedback     String
+  coachTip     String   @default("")
+  analysisText String
+  aspects      Json?
+  embedding    Json?
+  embeddingVector Unsupported("vector")?
+  createdAt    DateTime @default(now())
+
+  @@index([artworkId, mode])
+  @@index([createdAt])
+}
+
+model ArtworkKnowledge {
+  id         String   @id @default(cuid())
+  artworkId  String
+  artwork    Artwork  @relation(fields: [artworkId], references: [id], onDelete: Cascade)
+  text       String
+  embedding  Json?
+  embeddingVector Unsupported("vector")?
+  sourceType String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([artworkId, sourceType])
+  @@index([artworkId])
+  @@index([sourceType])
+}
+
+model ArtworkImageEmbedding {
+  id              String   @id @default(cuid())
+  artworkId       String
+  artwork         Artwork  @relation(fields: [artworkId], references: [id], onDelete: Cascade)
+  image           String
+  model           String
+  dimensions      Int
+  embedding       Json?
+  embeddingVector Unsupported("vector")?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([artworkId, model])
+  @@index([artworkId])
+  @@index([model])
+}
+
+model MissionAnalysisAttempt {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artworkId String?
+  artwork   Artwork? @relation(fields: [artworkId], references: [id], onDelete: SetNull)
+  status    String
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([userId, artworkId, createdAt])
+  @@index([status, createdAt])
+}
